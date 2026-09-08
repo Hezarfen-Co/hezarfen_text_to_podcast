@@ -35,6 +35,13 @@ def pipeline_file(relative: str) -> tuple:
     return None, tried
 
 
+def pipeline_root_present():
+    for root in pipeline_roots():
+        if (root / "router").is_dir() or (root / "script").is_dir():
+            return root
+    return None
+
+
 class FormatContractRegression(unittest.TestCase):
     def test_service_format_set_must_not_drift_from_the_locked_contract(self) -> None:
         self.assertEqual(
@@ -60,8 +67,15 @@ class FormatContractRegression(unittest.TestCase):
     def test_pipeline_plan_py_format_enum_must_define_the_same_set_as_the_service(self) -> None:
         path, tried = pipeline_file(os.path.join("script", "plan.py"))
         if path is None:
-            self.fail(
-                "gercegin kaynagi script/plan.py bulunamadi; hat yolu degismis olabilir. "
+            if pipeline_root_present() is not None:
+                self.fail(
+                    "hat koku bulundu ama script/plan.py YOK; yol degismis olabilir. "
+                    f"denenen yollar: {tried}"
+                )
+            self.skipTest(
+                "hat kaynagi hicbir yerde yok (vendor/pipeline gitignore'da). "
+                "Bu sozlesme testi hattin kaynagini okur; CI'da kosmasi icin "
+                "PIPELINE_REPO depo degiskenini ayarla. "
                 f"denenen yollar: {tried}"
             )
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -85,8 +99,15 @@ class FormatContractRegression(unittest.TestCase):
     def test_pipeline_cli_format_choices_must_define_the_same_set_as_the_service(self) -> None:
         path, tried = pipeline_file(os.path.join("router", "cli.py"))
         if path is None:
-            self.fail(
-                "gercegin kaynagi router/cli.py bulunamadi; hat yolu degismis olabilir. "
+            if pipeline_root_present() is not None:
+                self.fail(
+                    "hat koku bulundu ama router/cli.py YOK; yol degismis olabilir. "
+                    f"denenen yollar: {tried}"
+                )
+            self.skipTest(
+                "hat kaynagi hicbir yerde yok (vendor/pipeline gitignore'da). "
+                "Bu sozlesme testi hattin kaynagini okur; CI'da kosmasi icin "
+                "PIPELINE_REPO depo degiskenini ayarla. "
                 f"denenen yollar: {tried}"
             )
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -110,8 +131,15 @@ class FormatContractRegression(unittest.TestCase):
     def test_pipeline_cli_default_format_must_match_the_service_default(self) -> None:
         path, tried = pipeline_file(os.path.join("router", "cli.py"))
         if path is None:
-            self.fail(
-                "gercegin kaynagi router/cli.py bulunamadi; hat yolu degismis olabilir. "
+            if pipeline_root_present() is not None:
+                self.fail(
+                    "hat koku bulundu ama router/cli.py YOK; yol degismis olabilir. "
+                    f"denenen yollar: {tried}"
+                )
+            self.skipTest(
+                "hat kaynagi hicbir yerde yok (vendor/pipeline gitignore'da). "
+                "Bu sozlesme testi hattin kaynagini okur; CI'da kosmasi icin "
+                "PIPELINE_REPO depo degiskenini ayarla. "
                 f"denenen yollar: {tried}"
             )
         text = path.read_text(encoding="utf-8", errors="replace")

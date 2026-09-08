@@ -19,7 +19,8 @@ def _is_false(node: ast.AST) -> bool:
 
 
 def _flag_writers() -> set[str]:
-    tree = ast.parse(io.open(SOURCE, encoding="utf-8").read())
+    with io.open(SOURCE, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
     owners = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

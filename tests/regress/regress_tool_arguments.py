@@ -51,7 +51,8 @@ class ToolArgumentsMatchTheirParser(unittest.TestCase):
         self.assertTrue(TOOLS, "tools/*.py bulunamadi")
         for path in TOOLS:
             with self.subTest(tool=path.name):
-                tree = ast.parse(io.open(path, encoding="utf-8").read())
+                with io.open(path, encoding="utf-8") as handle:
+                    tree = ast.parse(handle.read())
                 orphan = sorted(_accessed_names(tree) - _declared_dests(tree))
                 self.assertEqual(
                     orphan,
@@ -64,7 +65,8 @@ class ToolArgumentsMatchTheirParser(unittest.TestCase):
 
     def test_declared_arguments_are_ascii_and_lowercase(self):
         for path in TOOLS:
-            tree = ast.parse(io.open(path, encoding="utf-8").read())
+            with io.open(path, encoding="utf-8") as handle:
+                tree = ast.parse(handle.read())
             for dest in sorted(_declared_dests(tree)):
                 with self.subTest(tool=path.name, dest=dest):
                     self.assertTrue(dest.isascii(), f"ASCII disi arguman: {dest}")

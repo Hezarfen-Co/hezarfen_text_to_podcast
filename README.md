@@ -602,7 +602,7 @@ bilinen bir kusuru geri getirdi mi" der.
 
 | Dosya | Kusur |
 | --- | --- |
-| `regress_format_vocabulary.py` | Format kümesi kilitli sözleşmeden sapmamalı. Gerçeğin kaynağı `script/plan.py` `Format` enum'u ve `router/cli.py` `choices` listesidir; test bu iki dosyayı **okuyup** karşılaştırır. Dosya bulunamazsa test atlanmaz, **açık hata** verir (yol değişmiş demektir). |
+| `regress_format_vocabulary.py` | Format kümesi kilitli sözleşmeden sapmamalı. Gerçeğin kaynağı `script/plan.py` `Format` enum'u ve `router/cli.py` `choices` listesidir; test bu iki dosyayı **okuyup** karşılaştırır. Yokluk ile **kayma** ayrılır: hat kökü bulunup da dosya yoksa **açık hata** (yol değişmiş demektir); hat kaynağı hiçbir yerde yoksa (CI'da `vendor/` gitignore'da olduğu için normaldir) test **atlanır** ve `PIPELINE_REPO`'yu ayarlamayı söyler. Koruma yol kayması için vardır, yokluğu cezalandırmak için değil. |
 | `regress_unanswered_stream.py` | Ayrıştırılamayan istek cevapsız bırakılmamalı; backend cevapsız akışı deadline boyunca bekler ve worker kiralamasını tutar. 8 MiB aşan cevap sessizce yutulmamalı, `frame_too_large` err'ine düşürülmeli. |
 | `regress_cancel_race.py` | `finish()` iptal bayrağını **aynı kilit altında** okumalı; bayrak setken `done` değil `cancelled` dönmeli ve `audio_id` yazılmamalı. Bellekte ve **diskte** aynı sonuç. Ölçülen: düzeltmeden önce bellek=`done` disk=`done` `audio_id=a1`. |
 | `regress_queued_failed.py` | `queued -> failed` geçişi yasal olmalı. Yoksa `begin()` öncesi patlayan iş sonsuza kadar `queued` kalır, her açılışta yeniden kuyruğa alınır ve `max_jobs` kotasından bir slotu kalıcı yer. |
@@ -825,7 +825,10 @@ biri eklenirse test kırmızıya döner ve korumanın canlandığını söyler.
 - **Test kodunda yorum ve docstring yok** — `src/` ile aynı kural. Açıklama test
   **metot adında** ve `assertX` **mesajında** durur.
 - Her dosyanın sonunda `if __name__ == "__main__": unittest.main()`.
-- Çok vakalı kontroller `subTest` ile; `@unittest.skip` kullanılmaz.
+- Çok vakalı kontroller `subTest` ile; `@unittest.skip` **dekoratörü** kullanılmaz
+  (test kalıcı olarak devre dışı bırakılmaz). Çalışma anında `self.skipTest()` yalnızca
+  **dış bir kaynak gerçekten yoksa** kullanılır ve mesajı nasıl sağlanacağını söyler;
+  tek örneği `regress_format_vocabulary.py`'deki hat kaynağıdır.
 - Testler **ağ kullanmaz**, `aioquic` gerektirmez (`bridge.py` sınanırken
   `sys.modules`'a kukla bir `aioquic` konur), gerçek hattı import etmez ve
   `PODCAST_JOB_ROOT`'a yazmaz — hepsi `tempfile` altında çalışır.
