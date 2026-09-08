@@ -1,0 +1,99 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Servis deposunu al
+        uses: actions/checkout@v4
+
+      - name: Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Hat deposunu vendor/pipeline icine al
+        if: vars.PIPELINE_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PIPELINE_REPO }}
+          ref: ${{ vars.PIPELINE_REF || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: vendor/pipeline
+
+      - name: Hat kaynagi var mi
+        run: |
+          if [ -f vendor/pipeline/script/plan.py ]; then
+            echo "hat kaynagi VAR - format sozlesmesi testleri kosacak"
+          else
+            echo "::warning::vendor/pipeline YOK. regress_format_vocabulary.py'nin"
+            echo "::warning::3 testi DUSECEK - bu testler format sozlugunu hattin"
+            echo "::warning::script/plan.py ve router/cli.py dosyalariyla karsilastirir."
+            echo "::warning::Cozum: depo degiskeni PIPELINE_REPO'yu ayarlayin"
+            echo "::warning::(ozel depo ise PIPELINE_TOKEN sirri da gerekir)."
+          fi
+
+      - name: Butunluk kontrolu
+        run: python -m src.main --validate
+
+      - name: Test paketi
+        run: python -m unittest discover -s tests -t . --verbose
+
+      - name: Fuzzing kampanyasi (sabit tohumlar, kapi)
+        run: |
+          set -e
+          for seed in 1 2 3; do
+            echo "--- tohum $seed ---"
+            python tools/fuzz_test.py --cases 20000 --seed "$seed"               --quiet --fail-on-finding
+          done
+
+      - name: Fuzzing kampanyasi (degisken tohum, bilgilendirme)
+        continue-on-error: true
+        run: |
+          seed="${GITHUB_RUN_NUMBER:-0}"
+          echo "kosuya ozgu tohum: $seed"
+          if ! python tools/fuzz_test.py --cases 20000 --seed "$seed"                  --quiet --fail-on-finding; then
+            echo "::warning::Degisken tohum yeni bir girdi buldu."
+            echo "::warning::Bulguyu tools/fuzz_test.py --seed $seed ile yeniden uret,"
+            echo "::warning::tests/fuzz/ icine regresyon testi ekle."
+          fi
+
+      - name: Yorum ve ASCII disi karakter denetimi
+        run: |
+          set -e
+          if grep -rlP --include='*.py' '[^\x00-\x7F]' src tests tools ; then
+            echo "::error::src/tests/tools icinde ASCII disi karakter var"; exit 1
+          fi
+          python - <<'PY'
+          import ast, io, pathlib, sys, tokenize
+          hata = []
+          for p in list(pathlib.Path("src").glob("**/*.py")) + \
+                   list(pathlib.Path("tests").glob("**/*.py")) + \
+                   list(pathlib.Path("tools").glob("**/*.py")):
+              with tokenize.open(p) as f:
+                  for tok in tokenize.generate_tokens(f.readline):
+                      if tok.type == tokenize.COMMENT:
+                          hata.append(f"{p}:{tok.start[0]} yorum")
+              t = ast.parse(io.open(p, encoding="utf-8").read())
+              for n in ast.walk(t):
+                  if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                    ast.AsyncFunctionDef)) and ast.get_docstring(n):
+                      hata.append(f"{p}:{getattr(n,'lineno',0)} docstring")
+          if hata:
+              print("::error::Python kodunda yorum/docstring bulundu (depo kurali: sifir)")
+              for h in hata[:20]:
+                  print("  ", h)
+              sys.exit(1)
+          print("yorum/docstring: sifir")
+          PY
+
+      - name: Sir taramasi
+        run: |
+          if grep -rInE 'sk-[A-Za-z0-9]{10,}' --exclude-dir=vendor --exclude-dir=.git . ; then
+            echo "::error::Depoda API anahtari deseni bulundu"; exit 1
+          fi
+          echo "sir taramasi temiz"

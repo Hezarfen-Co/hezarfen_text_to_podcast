@@ -1,0 +1,75 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        KUR_AGIR: ${KUR_AGIR:-1}
+    image: localhost/hezarfen-podcast:current
+    container_name: hezarfen-podcast-bridge
+    init: true
+    command: ["python", "-m", "src.bridge"]
+    environment:
+      AI_BRIDGE_HOST: hezarfen-backend
+      AI_BRIDGE_PORT: "8090"
+      AI_BACKEND_URL: http://hezarfen-backend:8080
+      AI_SHARED_TOKEN: ${AI_SHARED_TOKEN:?AI_SHARED_TOKEN gerekli}
+      AI_TLS_SERVER_NAME: localhost
+      AI_SERVICE_NAME: podcast
+      AI_MAX_CONCURRENT: "2"
+      AI_RECONNECT_SECS: "3"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PODCAST_JOB_ROOT: /data/podcast/jobs
+      PODCAST_WORKERS: "1"
+      PODCAST_MAX_JOBS: "8"
+      # Bitmis isleri ve ciktilarini kac gun sonra sil. 0 = ASLA silme.
+      # Kodda varsayilan 0 (veri silmek opt-in olmali); dagitimda acik deger
+      # verilir, yoksa podcast-out ve podcast-jobs suresiz buyur.
+      PODCAST_RETENTION_DAYS: "30"
+      PODCAST_STAGE_SECS: "0.2"
+      PODCAST_ETA_SECS: "0"
+      PODCAST_MEDIA_ROOT: /data/files
+      PODCAST_MODE: ${PODCAST_MODE:-real}
+      PODCAST_PIPELINE_PATH: ${PODCAST_PIPELINE_PATH:-/app/pipeline}
+      PODCAST_OUTPUT_ROOT: /data/podcast/out
+      PODCAST_LEDGER_DB: /data/podcast/kayit/router.sqlite
+      PODCAST_CHAPTER_LIMIT: "1"
+      PODCAST_TTS_ENGINE: supertonic-3
+      HF_HOME: /models/hf
+      TORCH_HOME: /models/torch
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      - hezarfen-data:/data:ro
+      - podcast-jobs:/data/podcast/jobs
+      - podcast-out:/data/podcast/out
+      - podcast-kayit:/data/podcast/kayit
+      - podcast-models:/models:ro
+      - podcast-easyocr:/home/podcast/.EasyOCR
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.main", "--health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    mem_limit: 8g
+    cpus: 4.0
+    networks:
+      - backend_net
+
+volumes:
+  podcast-jobs:
+  podcast-out:
+  podcast-kayit:
+  podcast-models:
+  podcast-easyocr:
+  hezarfen-data:
+    external: true
+    name: ${HEZARFEN_DATA_VOLUME:-hezarfen_backend_hezarfen-data}
+
+networks:
+  backend_net:
+    external: true
+    name: ${HEZARFEN_NET:-hezarfen_backend_default}

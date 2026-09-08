@@ -1,0 +1,45 @@
+name: mutation
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Mutasyon uygulanacak modul"
+        required: false
+        default: "src/protocol.py"
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Servis deposunu al
+        uses: actions/checkout@v4
+
+      - name: Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Hat deposunu vendor/pipeline icine al
+        if: vars.PIPELINE_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PIPELINE_REPO }}
+          ref: ${{ vars.PIPELINE_REF || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: vendor/pipeline
+
+      - name: Mutasyon testi
+        run: |
+          hedef="${{ github.event.inputs.target || 'src/protocol.py' }}"
+          python tools/mutation_test.py "$hedef" | tee mutasyon.log
+
+      - name: Raporu sakla
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutasyon-raporu
+          path: mutasyon.log
