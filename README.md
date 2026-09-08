@@ -5,8 +5,7 @@ servisi. Kablo çalışır, **iş yaşam döngüsü gerçektir** (kuyruk, diskte
 durum, işbirlikçi iptal, açılış süpürmesi), **gerçek hat bağlıdır**
 (`PODCAST_MODE=real`) ve **dağıtım katmanı yazılmıştır** (`deploy/`).
 
-Hâlâ eksik olan tek şey **kanıt**: gerçek hat bu repodan bir kez bile
-koşturulmadı ve imaj bir kez bile build edilmedi (bkz. "BİLİNEN EKSİKLER").
+
 
 ## Nasıl konumlanır
 
