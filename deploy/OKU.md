@@ -385,6 +385,98 @@ içermediği için** güvenlidir ve olduğu gibi kullanılabilir.
 
 ---
 
+## TTS motoru seçimi — lokal mi, ElevenLabs mi
+
+Servis iki TTS motorundan biriyle koşar. Seçim **iki bayrakla** yapılır ve
+ikisi de gerekir:
+
+| Değişken | Lokal (varsayılan) | ElevenLabs |
+| --- | --- | --- |
+| `PODCAST_TTS_ENGINE` | `supertonic-3` | `elevenlabs-flash-tr` |
+| `SES_BULUT_IZINLI` | `0` | `1` |
+| `ELEVENLABS_API_KEY` | gerekmez | **şart** |
+| `ELEVENLABS_VOICE_ID` | gerekmez | boşsa hazır ses |
+
+**İki bayrak neden ayrı?** Tek bayrak olsaydı anahtarı vermeyi unuttuğun koşu
+sessizce lokal sesle biter ve bunu ancak sesi dinlerken fark ederdin. Şimdi
+`SES_BULUT_IZINLI=0` iken bulut motoru çağrılırsa `BulutYasak` fırlar —
+**açık hata, sessiz düşme yok**. Aynı mantığın tersi de geçerli: izin açık ama
+anahtar yoksa `MotorYuklenemedi` gelir.
+
+`.env` içine yazılır (dosya `.gitignore`'dadır, `compose.yaml` yalnızca
+interpolasyon kullanır, literal sır taşımaz):
+
+```
+PODCAST_TTS_ENGINE=elevenlabs-flash-tr
+SES_BULUT_IZINLI=1
+ELEVENLABS_API_KEY=<panelden alinan anahtar>
+ELEVENLABS_VOICE_ID=<panelden alinan ses kimligi>
+```
+
+### Kilitli konfigürasyon
+
+Bunlar `ses/ayar.py` içindedir, compose'tan **değiştirilmez**. Kullanıcı
+2026-09-16'da örnekleri dinleyip seçti:
+
+| Ayar | Değer | Gerekçe |
+| --- | --- | --- |
+| model | `eleven_flash_v2_5` | Seçilen; `multilingual_v2` ve `turbo_v2_5` ile yan yana dinlendi |
+| `language_code` | `tr` | Dili **zorlar**. `multilingual_v2` bu alanı almaz, otomatik algılar — Türkçe telaffuzda belirleyici fark |
+| kararlılık | `0.85` | Ders anlatımı: bölümler arası ton kaymasın |
+| benzerlik | `0.85` | — |
+| stil | `0.0` | Düz anlatıcı tonu; yüksek stil ifadeyi dalgalandırır |
+| çıktı | `mp3_44100_128` → WAV | Aşağıya bakın |
+
+### Neden mp3 isteyip WAV'a çeviriyoruz
+
+`TtsMotoru` sözleşmesi WAV şart koşuyor. İlk tercih `pcm_44100` idi (dönüşüm
+gerektirmez), ama **ölçüldü:**
+
+```
+HTTP 403  "Output format 'pcm_44100' is only available on the Pro tier and above."
+```
+
+Hesap Pro değil. Bu yüzden mp3 istenir ve `ses/ayar.py::FFMPEG` ile WAV'a
+çevrilir. ffmpeg zaten bu hattın **sabit** bağımlılığı (montaj, `ses/dogrula.py`
+ve `ayar.FFMPEG` hepsi ona dayanıyor) — yeni bağımlılık değil. Pro hesaba
+geçilirse `ELEVENLABS_CIKTI_BICIMI` `pcm_44100` yapılır, dönüşüm atlanır.
+
+### ElevenLabs'e geçince ne değişir
+
+- **Ağ şart olur.** Lokal motor ağ kullanmaz; bulut motoru her bölüm için
+  istek atar. Konteyner dışarı çıkamıyorsa koşu `MotorHatasi` ile düşer.
+- **Ağırlık hacmi TTS için gerekmez.** `podcast-models` (~3,9 GB) yalnızca
+  lokal TTS ve ASR içindi. OCR ve gömme yolları hâlâ kullanıyor, bu yüzden
+  hacmi kaldırma — ama ElevenLabs tarafında hiçbir ağırlık indirilmez,
+  `HF_HUB_OFFLINE=1` bunu etkilemez.
+- **Ücret sağlayıcıda sayılır.** Karakter başına. Uzun bir dersin tüm
+  bölümlerini üretmeden önce `PODCAST_CHAPTER_LIMIT=1` ile tek bölüm dene.
+- **Hız:** ölçülen RTF **0,43** (3,39 sn ses, 1,46 sn üretim) — lokal
+  `supertonic-3` ile aynı seviyede, yani hız gerekçesiyle seçim yapılmaz.
+
+### Anahtarın izinleri
+
+Eldeki anahtar **salt TTS**. Ölçüldü:
+
+```
+/voices  -> 401  missing the permission voices_read
+/models  -> 401  missing the permission models_read
+```
+
+Sonuç: ses listesi API'den **çekilemez**. `voice_id` ElevenLabs panelinden elle
+alınıp `ELEVENLABS_VOICE_ID`'ye yazılır. Panelde anahtara `voices_read` izni
+eklenirse adaptör listeyi kendisi okuyabilir.
+
+### Elle doğrulama
+
+```powershell
+# .env yuklenmis bir kabukta
+python tools\elevenlabs_test.py --metin "Merhaba"
+```
+
+Çıktı `out/elevenlabs/merhaba.mp3`. Bu betik **hattı çalıştırmaz**, yalnızca
+API'yi ve anahtarı sınar; motor adaptörünü sınamak için hattı koştur.
+
 ## Hacimler
 
 | Hacim | Bağlantı | Mod | Ne tutar |

@@ -62,6 +62,16 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
   tekil kaldı; `audio_ids`/`script_ids` **eklendi**. Alan eklemek geriye dönük
   uyumludur, yeniden adlandırmak değildir.
 
+- **Bulut TTS iki bayrakla acilir.** `PODCAST_TTS_ENGINE=elevenlabs-flash-tr`
+  **ve** `SES_BULUT_IZINLI=1` birlikte gerekir. Tek bayrak olsaydi anahtari
+  vermeyi unuttugun kosu sessizce lokal sesle biterdi; simdi izin kapaliyken
+  bulut motoru `BulutYasak` firlatir. ElevenLabs konfigurasyonu (model
+  `eleven_flash_v2_5`, `language_code=tr`, kararlilik 0.85) `ses/ayar.py`
+  icinde KILITLIDIR, compose'tan degistirilmez. Anahtar yalnizca ortamdan
+  okunur; `SesParcasi.ek` sozlugune, loga ve hata metnine YAZILMAZ.
+- **`pcm_44100` istenmez.** OLCULDU: ElevenLabs "only available on the Pro
+  tier" deyip HTTP 403 veriyor. mp3 istenip `ayar.FFMPEG` ile WAV'a cevrilir;
+  ffmpeg zaten hattin sabit bagimliligi, yeni bagimlilik degil.
 - **Fuzz yükleri kaçış dizisiyle yazılır.** Depo kuralı `src/tests/tools` altında
   ASCII dışı karakter yasaklar (CI kapısı), ama fuzzing UTF-8 yollarını sınamak için
   ASCII dışı **değerlere** ihtiyaç duyar. Çözüm: dosyada `"ç"`, değerde `ç`.

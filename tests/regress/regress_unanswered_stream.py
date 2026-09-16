@@ -8,14 +8,19 @@ import unittest
 from src import config, protocol
 
 
-def install_fake_aioquic() -> None:
-    if "aioquic" in sys.modules:
-        return
-    try:
-        import aioquic
-        return
-    except ImportError:
-        pass
+SAHTE_MODULLER = (
+    "aioquic",
+    "aioquic.asyncio",
+    "aioquic.asyncio.protocol",
+    "aioquic.quic",
+    "aioquic.quic.configuration",
+    "aioquic.quic.events",
+    "src.bridge",
+)
+
+
+def install_fake_aioquic() -> dict:
+    onceki = {ad: sys.modules.get(ad) for ad in SAHTE_MODULLER}
 
     class QuicConnectionProtocol:
         def __init__(self, *args, **kwargs) -> None:
@@ -65,6 +70,16 @@ def install_fake_aioquic() -> None:
     sys.modules["aioquic.quic"] = quic_module
     sys.modules["aioquic.quic.configuration"] = configuration_module
     sys.modules["aioquic.quic.events"] = events_module
+    sys.modules.pop("src.bridge", None)
+    return onceki
+
+
+def restore_modules(onceki: dict) -> None:
+    for ad, modul in onceki.items():
+        if modul is None:
+            sys.modules.pop(ad, None)
+        else:
+            sys.modules[ad] = modul
 
 
 class FakeQuic:
@@ -90,10 +105,20 @@ def decode_frame(data: bytes) -> dict:
 class UnansweredStreamRegression(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        install_fake_aioquic()
+        cls._onceki_moduller = install_fake_aioquic()
         from src import bridge
 
         cls.bridge = bridge
+        taban = bridge.BridgeProtocol.__mro__[1]
+        kukla = sys.modules["aioquic.asyncio.protocol"].QuicConnectionProtocol
+        assert taban is kukla, (
+            "BridgeProtocol kukla tabandan turemedi; gercek aioquic kurulu olsa "
+            "bile test ag ACMAMALI (taban=%r)" % (taban,)
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        restore_modules(cls._onceki_moduller)
 
     def setUp(self) -> None:
         self._log_level = config._active_level

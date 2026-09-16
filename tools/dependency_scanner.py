@@ -25,6 +25,13 @@ DELIBERATELY_ABSENT = {
     "rapidocr_onnxruntime": "opsiyonel OCR backend B - ingest/ocr.py, try icinde",
 }
 
+CONTAINERFILE_INSTALLED = {
+    "onnxruntime": "Containerfile pip adimi: onnxruntime==1.23.2 (ACIKCA kurulur)",
+    "transformers": "Containerfile KUR_AGIR blogu: pip install transformers==5.15.0",
+    "torch": "Containerfile KUR_AGIR blogu: pip install torch torchvision (CPU tekerlegi)",
+    "torchvision": "Containerfile KUR_AGIR blogu: torch ile birlikte",
+}
+
 
 def top_module(name: str) -> str:
     return name.split(".")[0]
@@ -89,6 +96,8 @@ def main() -> int:
     for module in sorted(used):
         if module in LOCAL or module in stdlib or module in DELIBERATELY_ABSENT:
             continue
+        if module in CONTAINERFILE_INSTALLED:
+            continue
         package = ALIASES.get(module, module).lower().replace("-", "_").replace(".", "_")
         if package in declared or module.lower().replace("-", "_") in declared:
             continue
@@ -101,6 +110,9 @@ def main() -> int:
     for module, reason in sorted(DELIBERATELY_ABSENT.items()):
         if module in used:
             print("[scanner] bilerek yok: %-22s %s" % (module, reason), flush=True)
+    for module, reason in sorted(CONTAINERFILE_INSTALLED.items()):
+        if module in used:
+            print("[scanner] imajda kurulu: %-20s %s" % (module, reason), flush=True)
     if transitive:
         print("[scanner] beyan yok ama KURULU (gecisli): %s" % ", ".join(transitive), flush=True)
         print("[scanner] bunlar baska bir paket uzerinden geliyor; pin YOK, kirilgan.", flush=True)
