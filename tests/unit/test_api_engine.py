@@ -127,7 +127,10 @@ class StubHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         self.server.calls.append((self.path, body, {k.lower(): v for k, v in self.headers.items()}))
         if self.path.startswith("/chat/completions"):
-            status, payload = self.server.llm_response
+            if self.server.llm_sequence:
+                status, payload = self.server.llm_sequence.pop(0)
+            else:
+                status, payload = self.server.llm_response
         elif "/text-to-speech/" in self.path:
             delay = self.server.tts_delay
             if delay:
@@ -158,6 +161,7 @@ class StubServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), StubHandler)
         self.calls: list = []
         self.llm_response = (200, json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode())
+        self.llm_sequence: list = []
         self.tts_response = (200, b"")
         self.tts_delay = 0.0
 
@@ -295,6 +299,43 @@ class ClientTests(EnvIsolatedTestCase):
         with self.assertRaises(llm.LlmError) as raised:
             llm.chat("soru", self.settings)
         self.assertEqual(raised.exception.code, "llm_error")
+        self.assertEqual(len(self.stub.llm_calls()), 2)
+
+    def test_llm_retryable_provider_error_inside_a_200_body_is_retried(self) -> None:
+        self.settings.llm_attempts = 2
+        self.settings.llm_retry_base_secs = 0.01
+        self.stub.llm_response = (
+            200,
+            json.dumps(
+                {"error": {"message": "Upstream error from Nvidia: Service temporarily overloaded", "code": 503}}
+            ).encode(),
+        )
+        with self.assertRaises(llm.LlmError) as raised:
+            llm.chat("soru", self.settings)
+        self.assertEqual(raised.exception.code, "llm_error")
+        self.assertIn("Service temporarily overloaded", str(raised.exception))
+        self.assertEqual(len(self.stub.llm_calls()), 2)
+
+    def test_llm_terminal_provider_error_inside_a_200_body_fails_on_the_first_try(self) -> None:
+        self.settings.llm_attempts = 3
+        self.settings.llm_retry_base_secs = 0.01
+        self.stub.llm_response = (
+            200,
+            json.dumps({"error": {"message": "model bulunamadi", "code": 400}}).encode(),
+        )
+        with self.assertRaises(llm.LlmError) as raised:
+            llm.chat("soru", self.settings)
+        self.assertEqual(raised.exception.code, "llm_error")
+        self.assertIn("model bulunamadi", str(raised.exception))
+        self.assertEqual(len(self.stub.llm_calls()), 1)
+
+    def test_llm_string_provider_error_inside_a_200_body_is_retried(self) -> None:
+        self.settings.llm_attempts = 2
+        self.settings.llm_retry_base_secs = 0.01
+        self.stub.llm_response = (200, json.dumps({"error": "kota doldu"}).encode())
+        with self.assertRaises(llm.LlmError) as raised:
+            llm.chat("soru", self.settings)
+        self.assertIn("kota doldu", str(raised.exception))
         self.assertEqual(len(self.stub.llm_calls()), 2)
 
     def test_llm_timeout_is_reported_as_a_timeout(self) -> None:
@@ -549,6 +590,38 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         record, _ = self.run_job("ders.pdf", "tek_ogretici")
         self.assertEqual(record["state"], jobs.STATE_FAILED)
         self.assertEqual(record["error_code"], "llm_empty")
+
+    def test_a_transient_provider_overload_is_absorbed_by_the_retry_and_the_job_finishes(self) -> None:
+        self.settings.llm_attempts = 2
+        self.settings.llm_retry_base_secs = 0.01
+        overload = (
+            200,
+            json.dumps({"error": {"message": "Service temporarily overloaded", "code": 503}}).encode(),
+        )
+        ok = (
+            200,
+            json.dumps({"choices": [{"message": {"content": "Hucre anlatimi. Oldukca uzun bir metin."}}]}).encode(),
+        )
+        self.stub.llm_sequence = [overload, ok]
+        record, stages = self.run_job("ders.pdf", "tek_ogretici")
+        self.assertEqual(record["state"], jobs.STATE_DONE)
+        self.assertEqual(len(self.stub.llm_calls()), 2)
+        self.assertTrue((self.output_root / record["script_id"]).exists())
+        self.assertTrue(any(stage == "script" for stage, _ in stages))
+
+    def test_a_persistent_provider_overload_fails_the_job_without_audio(self) -> None:
+        self.settings.llm_attempts = 2
+        self.settings.llm_retry_base_secs = 0.01
+        overload = (
+            200,
+            json.dumps({"error": {"message": "Service temporarily overloaded", "code": 503}}).encode(),
+        )
+        self.stub.llm_sequence = [overload, overload]
+        record, _ = self.run_job("ders.pdf", "tek_ogretici")
+        self.assertEqual(record["state"], jobs.STATE_FAILED)
+        self.assertEqual(record["error_code"], "llm_error")
+        self.assertIsNone(record["audio_id"])
+        self.assertEqual(len(self.stub.llm_calls()), 2)
 
     def test_cancelled_during_tts_ends_cancelled_without_artifacts(self) -> None:
         self.stub.tts_delay = 0.6

@@ -39,6 +39,30 @@ def _snippet(body: bytes) -> str:
     return text[:BODY_SNIPPET]
 
 
+def _provider_error(frame: Any) -> tuple[str, int | None] | None:
+    if not isinstance(frame, dict):
+        return None
+    error = frame.get("error")
+    if isinstance(error, str) and error.strip():
+        return f"LLM saglayici hatasi: {error.strip()[:BODY_SNIPPET]}", None
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    status = code if isinstance(code, int) else None
+    message = error.get("message")
+    detail = (
+        message.strip()
+        if isinstance(message, str) and message.strip()
+        else json.dumps(error, ensure_ascii=False)
+    )
+    prefix = (
+        f"LLM saglayici hatasi (HTTP {status})"
+        if status is not None
+        else "LLM saglayici hatasi"
+    )
+    return f"{prefix}: {detail[:BODY_SNIPPET]}", status
+
+
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
@@ -126,7 +150,15 @@ def chat(
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 frame = json.loads(response.read().decode("utf-8"))
-            return decode_reply(frame)
+            out_of_band = _provider_error(frame)
+            if out_of_band is not None:
+                detail, status = out_of_band
+                error = LlmError("llm_error", detail)
+                if status is not None and status not in RETRY_STATUS:
+                    raise error
+                last = error
+            else:
+                return decode_reply(frame)
         except urllib.error.HTTPError as exc:
             detail = f"HTTP {exc.code}"
             try:
