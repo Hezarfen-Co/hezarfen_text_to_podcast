@@ -106,6 +106,7 @@ class SecretLeakRegression(unittest.TestCase):
             {
                 "job_id": "e7c1d000-0000-4000-8000-000000000001",
                 "source_id": "ders.pdf",
+                "source_key": "ders.pdf",
                 "user_id": "kullanici-a",
                 "format": "tek_ogretici",
             },

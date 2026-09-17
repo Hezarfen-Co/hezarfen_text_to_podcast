@@ -59,8 +59,8 @@ class EngineError(Exception):
         self.code = code
 
 
-def _source_path(media_root: str, source_id: str) -> Path:
-    path = jobs.resolve_source(media_root, source_id)
+def _source_path(media_root: str, school: str, source_key: str) -> Path:
+    path = jobs.resolve_source(media_root, school, source_key)
     if not path.is_file():
         raise FileNotFoundError(f"kaynak dosya yok: {path}")
     return path
@@ -283,7 +283,7 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
 
     def runner(ctx: jobs.JobContext) -> None:
         try:
-            pdf = _source_path(settings.media_root, ctx.source_id)
+            pdf = _source_path(settings.media_root, ctx.school, ctx.source_key)
         except (ValueError, FileNotFoundError, OSError) as exc:
             config.log("error", f"is {ctx.job_id} kaynagi cozulemedi: {exc}")
             ctx.store.fail(ctx.job_id, SOURCE_NOT_FOUND)

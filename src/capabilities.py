@@ -65,6 +65,7 @@ def _optional_choice(payload: dict, key: str, choices: tuple, default: str) -> s
 def submit(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     source_id = _require_text(payload, "source_id")
+    source_key = _require_text(payload, "source_key")
     user_id = _require_text(payload, "user_id")
     job_format = _optional_choice(payload, "format", FORMATS, DEFAULT_FORMAT)
     if job_format in LLM_FORMATS and not _llm_ready:
@@ -76,7 +77,8 @@ def submit(school: str, payload: dict) -> dict:
     store = _active_store()
     try:
         record, eta = store.submit(
-            job_id, source_id, job_format, user_id=user_id, school=school
+            job_id, source_id, job_format, user_id=user_id, school=school,
+            source_key=source_key,
         )
     except jobs.JobExists as exc:
         raise CapabilityError("conflict", str(exc)) from exc

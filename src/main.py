@@ -104,7 +104,7 @@ def _check_registry(root: str) -> list[str]:
 
     submitted = _dispatch(
         "podcast.submit",
-        {"job_id": ID_ONE, "source_id": "ornek", "user_id": "kullanici-1"},
+        {"job_id": ID_ONE, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "kullanici-1"},
     )
     if submitted.get("job_id") != ID_ONE or submitted.get("state") != "queued":
         problems.append(f"anahtarsiz duz_okuma submit'i kabul edilmedi: {submitted}")
@@ -123,7 +123,7 @@ def _check_registry(root: str) -> list[str]:
         "conflict",
         _dispatch,
         "podcast.submit",
-        {"job_id": ID_ONE, "source_id": "ornek", "user_id": "kullanici-1"},
+        {"job_id": ID_ONE, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "kullanici-1"},
     )
 
     for capability, payload in (
@@ -167,7 +167,7 @@ def _check_registry(root: str) -> list[str]:
         "llm_unavailable",
         _dispatch,
         "podcast.submit",
-        {"job_id": ID_FOUR, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
+        {"job_id": ID_FOUR, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "k1", "format": "tek_ogretici"},
     )
     _expect_error(
         problems,
@@ -175,7 +175,7 @@ def _check_registry(root: str) -> list[str]:
         "llm_unavailable",
         _dispatch,
         "podcast.submit",
-        {"job_id": ID_FIVE, "source_id": "ornek", "user_id": "k1", "format": "ogrenci_hoca"},
+        {"job_id": ID_FIVE, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "k1", "format": "ogrenci_hoca"},
     )
 
     from .protocol import CapabilityError
@@ -183,7 +183,7 @@ def _check_registry(root: str) -> list[str]:
     try:
         _dispatch(
             "podcast.submit",
-            {"job_id": ID_SIX, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
+            {"job_id": ID_SIX, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "k1", "format": "tek_ogretici"},
         )
     except CapabilityError as exc:
         if "duz_okuma" not in str(exc):
@@ -217,21 +217,21 @@ def _check_registry(root: str) -> list[str]:
     capabilities.configure(store, llm_ready=True)
     with_key = _dispatch(
         "podcast.submit",
-        {"job_id": ID_SEVEN, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
+        {"job_id": ID_SEVEN, "source_id": "ornek", "source_key": "ornek.pdf", "user_id": "k1", "format": "tek_ogretici"},
     )
     if with_key.get("state") != "queued":
         problems.append(f"anahtar varken tek_ogretici submit'i kabul edilmedi: {with_key}")
 
     small = jobs.JobStore(root=os.path.join(root, "busy"), workers=1, max_jobs=1, stage_secs=0.0)
     capabilities.configure(small, llm_ready=False)
-    _dispatch("podcast.submit", {"job_id": ID_EIGHT, "source_id": "ilk", "user_id": "k1"})
+    _dispatch("podcast.submit", {"job_id": ID_EIGHT, "source_id": "ilk", "source_key": "ilk.pdf", "user_id": "k1"})
     _expect_error(
         problems,
         "kuyruk tavani asildiginda submit",
         "busy",
         _dispatch,
         "podcast.submit",
-        {"job_id": ID_NINE, "source_id": "ikinci", "user_id": "k1"},
+        {"job_id": ID_NINE, "source_id": "ikinci", "source_key": "ikinci.pdf", "user_id": "k1"},
     )
 
     capabilities.configure(None, llm_ready=False)
@@ -496,7 +496,12 @@ def _check_lifecycle(root: str) -> list[str]:
     try:
         submitted = _dispatch(
             "podcast.submit",
-            {"job_id": "44444444-4444-7444-8444-444444444444", "source_id": "kaynak", "user_id": "kullanici-1"},
+            {
+                "job_id": "44444444-4444-7444-8444-444444444444",
+                "source_id": "kaynak",
+                "source_key": "kaynak.pdf",
+                "user_id": "kullanici-1",
+            },
         )
         job_id = submitted["job_id"]
         if job_id != "44444444-4444-7444-8444-444444444444":
@@ -526,7 +531,12 @@ def _check_lifecycle(root: str) -> list[str]:
     try:
         submitted = _dispatch(
             "podcast.submit",
-            {"job_id": "55555555-5555-7555-8555-555555555555", "source_id": "kaynak", "user_id": "kullanici-1"},
+            {
+                "job_id": "55555555-5555-7555-8555-555555555555",
+                "source_id": "kaynak",
+                "source_key": "kaynak.pdf",
+                "user_id": "kullanici-1",
+            },
         )
         job_id = submitted["job_id"]
         started = _await_state(cancel_store, job_id, (jobs.STATE_RUNNING,), 10.0)
@@ -607,13 +617,21 @@ def _check_source_paths(root: str) -> list[str]:
     os.makedirs(media_root, exist_ok=True)
     for bad in ("..", "../x", "a/b", "/etc/passwd", "", "x" * 129, "..\\x", ".", "a b"):
         try:
-            resolved = jobs.resolve_source(media_root, bad)
-            problems.append(f"resolve_source kotu source_id'yi kabul etti: {bad!r} -> {resolved}")
+            resolved = jobs.resolve_source(media_root, "okul-a", bad)
+            problems.append(f"resolve_source kotu source_key'yi kabul etti: {bad!r} -> {resolved}")
         except ValueError:
             pass
-    good = jobs.resolve_source(media_root, "ders-01.pdf")
-    if good != Path(media_root).resolve() / "ders-01.pdf":
-        problems.append(f"resolve_source gecerli source_id'yi yanlis cozdu: {good}")
+    for bad_school in ("..", "../okul", "okul/a", "OKUL", "okul_a", "", ".", "x" * 65):
+        try:
+            resolved = jobs.resolve_source(media_root, bad_school, "ders-01.pdf")
+            problems.append(
+                f"resolve_source kotu okul slug'ini kabul etti: {bad_school!r} -> {resolved}"
+            )
+        except ValueError:
+            pass
+    good = jobs.resolve_source(media_root, "okul-a", "ders-01.pdf")
+    if good != Path(media_root).resolve() / "okul-a" / "ders-01.pdf":
+        problems.append(f"resolve_source gecerli adlari yanlis cozdu: {good}")
     if good.exists():
         problems.append("test kurulumu bozuk: cozulen dosya gercekten var")
     return problems
@@ -1075,8 +1093,9 @@ def _check_pipeline(root: str) -> list[str]:
         problems.append(f"kanca ilerlemeyi adim sayisindan turetmedi: {live_ctx.seen}")
 
     media_root = os.path.join(root, "hat-medya")
-    os.makedirs(media_root, exist_ok=True)
-    with open(os.path.join(media_root, "ders.pdf"), "wb") as handle:
+    okul_dir = os.path.join(media_root, VALIDATE_SCHOOL)
+    os.makedirs(okul_dir, exist_ok=True)
+    with open(os.path.join(okul_dir, "ders.pdf"), "wb") as handle:
         handle.write(b"%PDF-1.4\n")
 
     ok_store = _pipeline_store(
@@ -1091,7 +1110,7 @@ def _check_pipeline(root: str) -> list[str]:
     try:
         job_id = _dispatch(
             "podcast.submit",
-            {"job_id": ID_ONE, "source_id": "ders.pdf", "user_id": "k1"},
+            {"job_id": ID_ONE, "source_id": "ders.pdf", "source_key": "ders.pdf", "user_id": "k1"},
         )["job_id"]
         final = _await_state(ok_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_DONE:
@@ -1119,7 +1138,7 @@ def _check_pipeline(root: str) -> list[str]:
     try:
         job_id = _dispatch(
             "podcast.submit",
-            {"job_id": ID_TWO, "source_id": "ders.pdf", "user_id": "k1"},
+            {"job_id": ID_TWO, "source_id": "ders.pdf", "source_key": "ders.pdf", "user_id": "k1"},
         )["job_id"]
         final = _await_state(quiet_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
@@ -1137,7 +1156,7 @@ def _check_pipeline(root: str) -> list[str]:
     try:
         job_id = _dispatch(
             "podcast.submit",
-            {"job_id": ID_THREE, "source_id": "yok.pdf", "user_id": "k1"},
+            {"job_id": ID_THREE, "source_id": "yok.pdf", "source_key": "yok.pdf", "user_id": "k1"},
         )["job_id"]
         final = _await_state(missing_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
@@ -1195,8 +1214,8 @@ def _check_api_engine(root: str) -> list[str]:
         problems.append("api motoru gercek hat modulunu iceri almis")
 
     media_root = os.path.join(root, "api-medya")
-    os.makedirs(media_root, exist_ok=True)
-    blank = os.path.join(media_root, "bos.pdf")
+    os.makedirs(os.path.join(media_root, "okul"), exist_ok=True)
+    blank = os.path.join(media_root, "okul", "bos.pdf")
     try:
         import pymupdf
 
@@ -1221,7 +1240,9 @@ def _check_api_engine(root: str) -> list[str]:
     )
     store.start()
     try:
-        job_id = store.submit(ID_FOUR, "bos.pdf", "duz_okuma", user_id="k1", school="okul")[0]["job_id"]
+        job_id = store.submit(
+            ID_FOUR, "bos.pdf", "duz_okuma", user_id="k1", school="okul", source_key="bos.pdf"
+        )[0]["job_id"]
         final = _await_state(store, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"metin katmani olmayan PDF 'failed' olmadi: {final['state']}")
@@ -1245,7 +1266,9 @@ def _check_api_engine(root: str) -> list[str]:
     )
     missing.start()
     try:
-        job_id = missing.submit(ID_FIVE, "yok.pdf", "duz_okuma", user_id="k1", school="okul")[0]["job_id"]
+        job_id = missing.submit(
+            ID_FIVE, "yok.pdf", "duz_okuma", user_id="k1", school="okul", source_key="yok.pdf"
+        )[0]["job_id"]
         final = _await_state(missing, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"kaynagi olmayan api isi 'failed' olmadi: {final['state']}")

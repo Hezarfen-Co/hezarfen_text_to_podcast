@@ -138,8 +138,8 @@ CATEGORY_SCALARS = {
 
 SEED_FRAMES = [
     {"id": "01SEED", "school": "01OKUL", "capability": "podcast.submit",
-     "payload": {"job_id": "01JOB", "source_id": "01FILE", "user_id": "01USER",
-                 "format": "duz_okuma"}, "deadline_ms": 30000},
+     "payload": {"job_id": "01JOB", "source_id": "01FILE", "source_key": "01FILE",
+                 "user_id": "01USER", "format": "duz_okuma"}, "deadline_ms": 30000},
     {"id": "01SEED", "school": "01OKUL", "capability": "podcast.report",
      "payload": {"job_id": "01JOB", "source_id": "01FILE", "user_id": "01USER",
                  "state": "running"}},

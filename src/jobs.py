@@ -38,6 +38,7 @@ INTERRUPTED_CODE = "interrupted"
 REQUIRED_FIELDS = (
     "job_id",
     "source_id",
+    "source_key",
     "format",
     "state",
     "stage",
@@ -54,6 +55,7 @@ REQUIRED_FIELDS = (
 )
 
 SAFE_SOURCE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+SAFE_SCHOOL = re.compile(r"^[a-z0-9-]{1,64}$")
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 SHUTDOWN_TIMEOUT_SECS = 10.0
@@ -123,13 +125,20 @@ def can_transition(current: str, target: str) -> bool:
     return target in TRANSITIONS.get(current, ())
 
 
-def resolve_source(media_root: str | os.PathLike, source_id: str) -> Path:
-    if not isinstance(source_id, str) or SAFE_SOURCE_ID.match(source_id) is None:
-        raise ValueError(f"gecersiz source_id: {source_id!r}")
+def resolve_source(
+    media_root: str | os.PathLike, school: str, source_key: str
+) -> Path:
+    if not isinstance(school, str) or SAFE_SCHOOL.match(school) is None:
+        raise ValueError(f"gecersiz okul slug'i: {school!r}")
+    if not isinstance(source_key, str) or SAFE_SOURCE_ID.match(source_key) is None:
+        raise ValueError(f"gecersiz source_key: {source_key!r}")
     root = Path(media_root).resolve()
-    candidate = (root / source_id).resolve()
-    if candidate == root or root not in candidate.parents:
-        raise ValueError(f"source_id medya kokunun disina cikiyor: {source_id!r}")
+    school_dir = (root / school).resolve()
+    if school_dir == root or root not in school_dir.parents:
+        raise ValueError(f"okul slug'i medya kokunun disina cikiyor: {school!r}")
+    candidate = (school_dir / source_key).resolve()
+    if candidate == school_dir or root not in candidate.parents:
+        raise ValueError(f"source_key okul dizininin disina cikiyor: {source_key!r}")
     return candidate
 
 
@@ -175,6 +184,8 @@ class JobContext:
         self.store = store
         self.job_id = job_id
         self.source_id = record["source_id"]
+        self.school = record["school"]
+        self.source_key = record["source_key"]
         self.format = record["format"]
         self.stages = store.stages
 
@@ -611,6 +622,7 @@ class JobStore:
         job_format: str,
         user_id: str = "",
         school: str = "",
+        source_key: str = "",
     ) -> tuple[dict[str, Any], int]:
         if not isinstance(job_id, str) or SAFE_JOB_ID.match(job_id) is None:
             raise ValueError(f"gecersiz job_id: {job_id!r}")
@@ -624,6 +636,7 @@ class JobStore:
             record = {
                 "job_id": job_id,
                 "source_id": source_id,
+                "source_key": str(source_key),
                 "format": job_format,
                 "state": STATE_QUEUED,
                 "stage": "",

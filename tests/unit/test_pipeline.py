@@ -138,33 +138,45 @@ class LimitTests(PipelineTestCase):
 
 
 class ResolvePdfTests(PipelineTestCase):
-    def test_existing_file_under_media_root_resolves(self) -> None:
+    def test_existing_file_under_the_school_directory_resolves(self) -> None:
         media = self.root / "medya"
+        (media / "okul-a").mkdir(parents=True, exist_ok=True)
+        (media / "okul-a" / "ders.pdf").write_bytes(b"%PDF-1.4\n")
+        self.assertEqual(
+            pipeline.resolve_pdf(str(media), "okul-a", "ders.pdf"),
+            (media / "okul-a" / "ders.pdf").resolve(),
+        )
+
+    def test_a_flat_file_is_not_found_without_the_school_segment(self) -> None:
+        media = self.root / "medya-duz"
         media.mkdir(parents=True, exist_ok=True)
         (media / "ders.pdf").write_bytes(b"%PDF-1.4\n")
-        self.assertEqual(
-            pipeline.resolve_pdf(str(media), "ders.pdf"), (media / "ders.pdf").resolve()
-        )
+        with self.assertRaises(FileNotFoundError):
+            pipeline.resolve_pdf(str(media), "okul-a", "ders.pdf")
 
     def test_missing_file_raises_file_not_found(self) -> None:
         media = self.root / "medya-bos"
         media.mkdir(parents=True, exist_ok=True)
         with self.assertRaises(FileNotFoundError):
-            pipeline.resolve_pdf(str(media), "yok.pdf")
+            pipeline.resolve_pdf(str(media), "okul-a", "yok.pdf")
 
     def test_a_directory_is_not_accepted_as_a_source_file(self) -> None:
         media = self.root / "medya-dizin"
-        (media / "ders.pdf").mkdir(parents=True, exist_ok=True)
+        (media / "okul-a" / "ders.pdf").mkdir(parents=True, exist_ok=True)
         with self.assertRaises(FileNotFoundError):
-            pipeline.resolve_pdf(str(media), "ders.pdf")
+            pipeline.resolve_pdf(str(media), "okul-a", "ders.pdf")
 
-    def test_escaping_source_id_raises_value_error_before_touching_disk(self) -> None:
+    def test_escaping_source_key_raises_value_error_before_touching_disk(self) -> None:
         media = self.root / "medya-kacis"
         media.mkdir(parents=True, exist_ok=True)
         for bad in ("..", "../x", "a/b", ""):
-            with self.subTest(source_id=bad):
+            with self.subTest(source_key=bad):
                 with self.assertRaises(ValueError):
-                    pipeline.resolve_pdf(str(media), bad)
+                    pipeline.resolve_pdf(str(media), "okul-a", bad)
+        for bad in ("..", "../x", "a/b", "", "OKUL"):
+            with self.subTest(school=bad):
+                with self.assertRaises(ValueError):
+                    pipeline.resolve_pdf(str(media), bad, "ders.pdf")
 
 
 class DeriveOutputsTests(PipelineTestCase):

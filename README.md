@@ -99,7 +99,7 @@ sayısıdır (aşılırsa yine `busy`, ama `podcast.submit` içinden).
 
 | Yetenek | İstek payload'u | Başarılı cevap | Hatalar |
 | --- | --- | --- | --- |
-| `podcast.submit` (backend → servis) | `job_id` (**backend'in ürettiği**, zorunlu), `source_id` (zorunlu), `user_id` (zorunlu), `format` (ops.) | `{"job_id":...,"state":"queued","eta_secs":<int>}` | `bad_request`, `conflict`, `busy`, `llm_unavailable` |
+| `podcast.submit` (backend → servis) | `job_id` (**backend'in ürettiği**, zorunlu), `source_id` (zorunlu), `source_key` (**notun en yeni PDF ekinin blob anahtarı**, zorunlu), `user_id` (zorunlu), `format` (ops.) | `{"job_id":...,"state":"queued","eta_secs":<int>}` | `bad_request`, `conflict`, `busy`, `llm_unavailable` |
 | `podcast.cancel` (backend → servis) | `job_id` (zorunlu metin) | `{"job_id":...,"cancelled":<bool>}` | `bad_request`, `not_found` |
 | `podcast.report` (servis → backend) | `job_id`, `source_id`, `format`, `user_id`, `state`, `stage`, `progress`, `error_code` | `{"job_id":...,"stored":true}` | `unknown_job`, `not_permitted`, `invalid_payload`, `audio_missing`, `expired`, `unavailable` |
 | blob yükleme (servis → backend) | `{id, upload:true, school, job_id, name, content_type, size, duration_secs}` + tam `size` bayt | `{"status":"ok","key":"podcast/<job>.mp3","size":<int>}` | `unknown_job`, `expired`, `malformed` |
@@ -127,8 +127,10 @@ alanları tüketiyor ve o iki tarafın tüm alan adları İngilizce (`status`,
 
 **`source_id` bir dosya yolu DEĞİLDİR.** Backend'in kayıt kimliğidir; PDF
 baytı köprüden geçmez (`AI_API_ALLOWLIST` bayt sunan rotaları bilerek
-dışarıda bırakıyor, `constant.rs:612-615`). Kimliğin paylaşılan hacimdeki
-dosyaya nasıl çözüleceği sonraki adımın konusudur.
+dışarıda bırakıyor, `constant.rs:612-615`). Dosya paylaşılan hacimde şu yoldan
+çözülür: `PODCAST_MEDIA_ROOT/<school>/<source_key>`; `source_key` notun **en
+yeni PDF ekinin** blob anahtarıdır (`course_note_file.file`), `<school>` ise
+çerçevenin taşıdığı okul slug'ıdır.
 
 ## Durum makinesi
 
@@ -141,7 +143,7 @@ queued ──▶ running ──▶ done
 ```
 
 `queued → failed` **yasaldır**: iş `begin()`'den önce de patlayabilir (gerçek
-hatta örneğin `source_id` dosyaya çözülemez → `HatHatasi`). Bu geçiş yasak
+hatta örneğin `source_key` dosyaya çözülemez → `HatHatasi`). Bu geçiş yasak
 olsaydı `fail()` `InvalidTransition` yer, iş `queued` kalır, her açılışta
 yeniden kuyruğa alınır, yine patlar ve `PODCAST_MAX_JOBS` kotasından bir slotu
 kalıcı olarak yerdi.
@@ -182,7 +184,7 @@ diske insin; Windows dizin fsync'i desteklemez, oradaki `OSError` sessizce
 geçilir (platform farkı, hata değil).
 
 Açılışta kayıtlar **şema doğrulamasından** geçer: zorunlu alanlardan (`job_id`,
-`source_id`, `format`, `state`, `stage`, `progress`, `error_code`,
+`source_id`, `source_key`, `format`, `state`, `stage`, `progress`, `error_code`,
 `cancel_requested`, `audio_id`, `duration_secs`, `script_id`, `created_at`,
 `updated_at`, `user_id`, `school`) biri eksikse kayıt uyarı ile atlanır. Yerel
 depo artık caller'a görünen tek kaynak DEĞİLDİR: bozuk bir kayıt yalnızca bu
@@ -232,7 +234,7 @@ başlamadan iptal edildi) runner hiç çağrılmaz.
 
 | Üye | Anlamı |
 | --- | --- |
-| `ctx.job_id` / `ctx.source_id` / `ctx.format` | kaydın kimliği, kaynak kimliği, formatı |
+| `ctx.job_id` / `ctx.source_id` / `ctx.source_key` / `ctx.school` / `ctx.format` | kaydın kimliği, kaynak kimliği, kaynak blob anahtarı, okul slug'ı, formatı |
 | `ctx.stages` | `JobStore.stages` (aşama adları) |
 | `ctx.cancelled()` | iptal bayrağı **veya** servis kapanıyor mu |
 | `ctx.check()` | iptal varsa `JobCancelled` fırlatır, yoksa `None` |
@@ -367,7 +369,7 @@ sıfırsa uyarı loglar.
 
 | `error_code` | ne zaman |
 | --- | --- |
-| `source_not_found` | `resolve_source` reddetti, dosya yok, ya da `Hat` kurulurken `HatHatasi` |
+| `source_not_found` | `resolve_source` reddetti (`source_key` ya da okul slug'ı kaçışı), `PODCAST_MEDIA_ROOT/<school>/<source_key>` dosyası yok, ya da `Hat` kurulurken `HatHatasi` |
 | `no_audio` | hat koştu ama `mp3_yollari` **boş** — sessizce boş cevap dönmek yerine iş `failed` olur |
 | `internal` | başka her istisna (işçinin genel dalı) |
 | `interrupted` | açılış süpürmesi (süreç koşan işin ortasında öldü) |
@@ -404,12 +406,13 @@ aynıdır. Aşama adları:
 
 `PODCAST_ETA_SECS` verilmişse her iki modda da o kazanır.
 
-`resolve_source` `PODCAST_MEDIA_ROOT` altındaki dosya yolunu üretir:
-`^[A-Za-z0-9._-]{1,128}$` desenine uymayan `source_id` `ValueError` alır ve
-`Path.resolve()` sonrası sonucun medya kökünün **altında** kaldığı ayrıca
-doğrulanır (symlink kaçışı için; `..` deseni geçse bile burada takılır).
-Dosyanın **var olup olmadığına bakmaz**; varlık denetimini
-`pipeline.resolve_pdf()` yapar ve dosya yoksa iş `failed` +
+`resolve_source(media_root, school, source_key)` `PODCAST_MEDIA_ROOT` altındaki
+`<school>/<source_key>` dosya yolunu üretir: okul slug'ı `^[a-z0-9-]{1,64}$`,
+`source_key` ise `^[A-Za-z0-9._-]{1,128}$` desenine uymalıdır; uymayan girdi
+`ValueError` alır. Her iki segment için de `Path.resolve()` sonrası sonucun
+medya kökünün **altında** kaldığı ayrıca doğrulanır (symlink kaçışı için; `..`
+deseni geçse bile burada takılır). Dosyanın **var olup olmadığına bakmaz**;
+varlık denetimini `pipeline.resolve_pdf()` yapar ve dosya yoksa iş `failed` +
 `error_code: "source_not_found"` olur.
 
 ## İki motor (`PODCAST_ENGINE`)
@@ -496,7 +499,7 @@ değişmelidir.
 | `PODCAST_MAX_JOBS` | `8` | Kuyruk + koşan iş tavanı; aşılırsa `busy` |
 | `PODCAST_STAGE_SECS` | `0.2` | Sahte aşama süresi (gerçek hat bağlanınca anlamsızlaşır) |
 | `PODCAST_ETA_SECS` | `0` | Bir işin tahmini süresi (sn). `0` = otomatik (aşama sayısı × `PODCAST_STAGE_SECS`, en az 1). Gerçek hat için `2700` gibi bir değer verilir; aralık `0..86400` |
-| `PODCAST_MEDIA_ROOT` | `/data/files` | `source_id`'nin çözüleceği paylaşılan dosya kökü; backend'in `FILES_PATH` değeriyle **aynı** olmalı |
+| `PODCAST_MEDIA_ROOT` | `/data/files` | `source_key`'in `<school>/<source_key>` altında çözüleceği paylaşılan dosya kökü; backend'in `FILES_PATH` değeriyle **aynı** olmalı |
 | `PODCAST_MODE` | `simulate` | `simulate` \| `real`. Başka değer → exit 2 |
 | `PODCAST_ENGINE` | `api` | `api` \| `local`. Başka değer → exit 2 |
 | `PODCAST_CHAPTER_CHARS` | `6000` | `api`: bolum basina en fazla karakter (`200..100000`) |
@@ -611,8 +614,9 @@ Denetlediği kapılar:
 - **iptal yarışı**: `finish()` çağrılmadan hemen önce gelen `cancel`'ın işi
   `done` değil `cancelled` bitirdiği ve bunun **diske de** yansıdığı
 - **`queued → failed`** geçişinin yasal olduğu (başlamadan patlayan iş)
-- **`resolve_source` yol kaçışı**: `..`, `../x`, `a/b`, `/etc/passwd`, boş dize,
-  129 karakterlik ad, `..\x`, `.` reddedilir; geçerli ad medya kökü altına çözülür
+- **`resolve_source` yol kaçışı**: okul slug'ı ve `source_key` için `..`, `../x`,
+  `a/b`, `/etc/passwd`, boş dize, 129 karakterlik ad, `..\x`, `.`, `OKUL` ve
+  `okul_a` reddedilir; geçerli çift `<school>/<source_key>` altına çözülür
 - **`PODCAST_ETA_SECS`** verildiğinde `estimate_eta`'nın sahte aşama süresini
   değil onu kullandığı, `stages` parametresinin dinlendiği
 - **kayıt şeması**: zorunlu alanı eksik kaydın açılışta atlandığı, sağlam
@@ -688,8 +692,8 @@ bilinen bir kusuru geri getirdi mi" der.
 | `regress_identifier_path.py` | `audio_id`/`script_id` çıktı köküne göre **relatif yol** olmalı, dosya adı değil. Gerçek yol `<stem>/ses/<format>/<stem>-bNN.mp3`; sadece dosya adı alınırsa üç dizin seviyesi kaybolur **ve** aynı PDF'in `duz_okuma` ile `tek_ogretici` koşusu aynı kimliği döner (bölüm_id formattan bağımsız). Kök dışı kalan yol dosya adına düşer. |
 | `regress_script_alignment.py` | `bolum_limiti` yalnızca **sese** uygulanıyor; `script_yollari` her zaman tüm bölümleri taşır. 1 ses + 3 script → `script_ids` 1 elemana filtrelenmeli. Eşleşme hiç tutmazsa filtrelenmeden dönmeli (ve uyarı loglanmalı). |
 | `regress_absolute_path.py` | `job_root`/`output_root`/`media_root`/`ledger_db` **mutlak** olmalı. Ölçülen kusur: göreli çıktı kökü verildiğinde hattın ffmpeg concat listesi yolu ikiye katlıyor ve montaj patlıyor. |
-| `regress_path_traversal.py` | `resolve_source` şunları reddetmeli: `..`, `../x`, `a/b`, `/etc/passwd`, `..\x`, `.`, boş ad, 129 karakterlik ad, `\\srv\share`, `C:\Windows`, NUL içeren ad. Geçerli ad kabul edilir ve sonuç `media_root` **altında** kalır. |
-| `regress_schema_validation.py` | Eksik alanlı iş kaydı açılışta atlanmalı (`KeyError` değil). `REQUIRED_FIELDS`'a `audio_ids`/`script_ids` **eklenmemeli** — eklenirse alan eklenmeden önce yazılmış eski kayıtlar topluca atılır. |
+| `regress_path_traversal.py` | `resolve_source` şunları reddetmeli: `..`, `../x`, `a/b`, `/etc/passwd`, `..\x`, `.`, boş ad, 129 karakterlik ad, `\\srv\share`, `C:\Windows`, NUL içeren ad; ayrıca okul slug'ı için `OKUL`, `Okul-A`, `okul_a`, `okul.a`, 65 karakterlik ad. Geçerli çift (okul + anahtar) kabul edilir ve sonuç `media_root` **altında** kalır. |
+| `regress_schema_validation.py` | Eksik alanlı iş kaydı açılışta atlanmalı (`KeyError` değil). `REQUIRED_FIELDS`'a `audio_ids`/`script_ids` **eklenmemeli** — eklenirse alan eklenmeden önce yazılmış eski kayıtlar topluca atılır. `source_key` ise bilinçli olarak zorunludur: onsuz bir iş kaynağa hiç çözülemez. |
 | `regress_tmp_residue.py` | Geçici dosya adı pid içerir; açılışta `*.json.tmp*` artıkları temizlenir; atomik yazma temp + `os.replace` ile yapılır. Ayrıca temizleme mantığı **kopyaladığı dosyaları silmemeli** (PowerShell `-Include` tuzağının Python karşılığı: filtre gerçekten uygulanıyor mu). |
 | `regress_secret_leak.py` | `DEEPSEEK_API_KEY` ve `AI_SHARED_TOKEN` değerleri `Config.summary()` çıktısında, iş JSON kayıtlarında ve istisna metinlerinde geçmemeli. Kanarya değerlerle sınanır. |
 | `regress_mutation_survivors.py` | Mutasyon testinin hayatta bıraktığı 10 mutantın kapattığı boşluklar: `len(body) > MAX_FRAME_BYTES` sınırı **tam değerinde** (kabul) ve bir bayt üstünde (ret), istisna metinlerinin kod+mesaj taşıması, `ApiResponse` alanlarının okunması, `GREETING_TIMEOUT_SECS < 10` (backend `AI_HANDSHAKE_TIMEOUT_SECS`) ve `KEEPALIVE_SECS < IDLE_TIMEOUT_SECS` bağıntıları. |
@@ -1282,7 +1286,7 @@ noktası `bridge.build_store(settings, runner=..., stages=...)`'tır:
 ```python
 def hat_runner(ctx):
     ctx.check()
-    pdf = jobs.resolve_source(settings.media_root, ctx.source_id)
+    pdf = jobs.resolve_source(settings.media_root, ctx.school, ctx.source_key)
 
     def gunluk(asama, oran=0.0):
         ctx.check()

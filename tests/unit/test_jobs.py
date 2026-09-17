@@ -364,19 +364,47 @@ class WorkerLoopTests(JobTestCase):
 
 
 class SourceResolutionTests(JobTestCase):
-    def test_valid_name_resolves_under_the_media_root(self) -> None:
+    def test_valid_name_resolves_under_the_school_directory(self) -> None:
         media = self.root / "medya"
         media.mkdir(parents=True, exist_ok=True)
-        resolved = jobs.resolve_source(media, "ders-01.pdf")
-        self.assertEqual(resolved, media.resolve() / "ders-01.pdf")
+        resolved = jobs.resolve_source(media, "okul-a", "ders-01.pdf")
+        self.assertEqual(resolved, media.resolve() / "okul-a" / "ders-01.pdf")
+
+    def test_the_school_segment_is_used_instead_of_the_flat_path(self) -> None:
+        media = self.root / "medya-duz"
+        media.mkdir(parents=True, exist_ok=True)
+        (media / "ders-01.pdf").write_bytes(b"%PDF-1.4\n")
+        resolved = jobs.resolve_source(media, "okul-a", "ders-01.pdf")
+        self.assertEqual(resolved, media.resolve() / "okul-a" / "ders-01.pdf")
+        self.assertFalse(resolved.exists(), "duz yoldaki kaynak okul segmenti yok sayilarak bulundu")
 
     def test_escaping_names_are_rejected(self) -> None:
         media = self.root / "medya2"
         media.mkdir(parents=True, exist_ok=True)
         for bad in ("..", "../x", "a/b", "/etc/passwd", "", "."):
-            with self.subTest(source_id=bad):
+            with self.subTest(source_key=bad):
                 with self.assertRaises(ValueError):
-                    jobs.resolve_source(media, bad)
+                    jobs.resolve_source(media, "okul-a", bad)
+
+    def test_escaping_school_slugs_are_rejected(self) -> None:
+        media = self.root / "medya3"
+        media.mkdir(parents=True, exist_ok=True)
+        for bad in ("..", "../x", "a/b", "/etc/passwd", "", ".", "OKUL", "okul_a", "x" * 65):
+            with self.subTest(school=bad):
+                with self.assertRaises(ValueError, msg=f"okul slug'i kabul edildi: {bad!r}"):
+                    jobs.resolve_source(media, bad, "ders.pdf")
+
+    def test_a_non_text_school_or_key_is_rejected(self) -> None:
+        media = self.root / "medya4"
+        media.mkdir(parents=True, exist_ok=True)
+        for bad in (None, 7, b"okul"):
+            with self.subTest(value=bad):
+                with self.assertRaises(ValueError):
+                    jobs.resolve_source(media, bad, "ders.pdf")
+        for bad in (None, 7, b"ders.pdf"):
+            with self.subTest(value=bad):
+                with self.assertRaises(ValueError):
+                    jobs.resolve_source(media, "okul-a", bad)
 
 
 class StatusFileTests(JobTestCase):

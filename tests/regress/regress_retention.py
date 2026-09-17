@@ -13,6 +13,7 @@ def _record(job_id, state, updated_at, audio=None, script=None):
     return {
         "job_id": job_id,
         "source_id": "kaynak.pdf",
+        "source_key": "kaynak.pdf",
         "format": "duz_okuma",
         "state": state,
         "stage": "done",

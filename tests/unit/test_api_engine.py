@@ -438,10 +438,10 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="podcast-api-")
         root = Path(self._tmp.name)
         self.media_root = root / "medya"
-        self.media_root.mkdir(parents=True, exist_ok=True)
+        (self.media_root / "okul-a").mkdir(parents=True, exist_ok=True)
         self.output_root = root / "cikti"
         self.job_root = root / "isler"
-        make_pdf(self.media_root / "ders.pdf", PAGE_TEXT)
+        make_pdf(self.media_root / "okul-a" / "ders.pdf", PAGE_TEXT)
         self._counter = 0
         self.settings = config.Config(require_token=False)
         self.settings.media_root = str(self.media_root)
@@ -484,7 +484,9 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         store.update_progress = recording
         store.start()
         try:
-            job_id = store.submit(self.job_id(), source_id, job_format)[0]["job_id"]
+            job_id = store.submit(
+                self.job_id(), source_id, job_format, school="okul-a", source_key=source_id
+            )[0]["job_id"]
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
                 record = store.get(job_id)
@@ -636,7 +638,9 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         )
         store.start()
         try:
-            job_id = store.submit(self.job_id(), "ders.pdf", "duz_okuma")[0]["job_id"]
+            job_id = store.submit(
+                self.job_id(), "ders.pdf", "duz_okuma", school="okul-a", source_key="ders.pdf"
+            )[0]["job_id"]
             deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline:
                 if store.get(job_id)["stage"] == api_engine.STAGES[3]:

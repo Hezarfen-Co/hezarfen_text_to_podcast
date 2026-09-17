@@ -33,7 +33,12 @@ class CapabilityTestCase(unittest.TestCase):
         return raised.exception.code
 
     def submit(self, job_id: str, source_id: str, **extra: object) -> dict:
-        payload = {"job_id": job_id, "source_id": source_id, "user_id": USER_ID}
+        payload = {
+            "job_id": job_id,
+            "source_id": source_id,
+            "source_key": "ders.pdf",
+            "user_id": USER_ID,
+        }
         payload.update(extra)
         return capabilities.dispatch("podcast.submit", "okul-a", payload)
 
@@ -118,13 +123,25 @@ class SubmitTests(CapabilityTestCase):
         record = self.store.get(JOB_ONE)
         self.assertEqual(record["school"], "okul-a")
         self.assertEqual(record["user_id"], USER_ID)
+        self.assertEqual(record["source_id"], "ders.pdf")
+        self.assertEqual(record["source_key"], "ders.pdf")
 
     def test_missing_or_blank_source_id_is_bad_request(self) -> None:
         for payload in (
-            {"job_id": JOB_ONE, "user_id": USER_ID},
-            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": ""},
-            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": "   "},
-            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": 7},
+            {"job_id": JOB_ONE, "user_id": USER_ID, "source_key": "ders.pdf"},
+            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": "", "source_key": "ders.pdf"},
+            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": "   ", "source_key": "ders.pdf"},
+            {"job_id": JOB_ONE, "user_id": USER_ID, "source_id": 7, "source_key": "ders.pdf"},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.error_code("podcast.submit", payload), "bad_request")
+
+    def test_missing_or_blank_source_key_is_bad_request(self) -> None:
+        for payload in (
+            {"job_id": JOB_ONE, "source_id": "x", "user_id": USER_ID},
+            {"job_id": JOB_ONE, "source_id": "x", "user_id": USER_ID, "source_key": ""},
+            {"job_id": JOB_ONE, "source_id": "x", "user_id": USER_ID, "source_key": "   "},
+            {"job_id": JOB_ONE, "source_id": "x", "user_id": USER_ID, "source_key": 7},
         ):
             with self.subTest(payload=payload):
                 self.assertEqual(self.error_code("podcast.submit", payload), "bad_request")
@@ -142,6 +159,7 @@ class SubmitTests(CapabilityTestCase):
         self.assertEqual(self.error_code("podcast.submit", {
             "job_id": JOB_ONE,
             "source_id": "x",
+            "source_key": "ders.pdf",
             "user_id": USER_ID,
         }), "conflict")
 
@@ -184,6 +202,7 @@ class SubmitTests(CapabilityTestCase):
                     self.error_code("podcast.submit", {
                         "job_id": JOB_ONE,
                         "source_id": "x",
+                        "source_key": "ders.pdf",
                         "user_id": USER_ID,
                         "format": name,
                     }),
@@ -195,6 +214,7 @@ class SubmitTests(CapabilityTestCase):
             capabilities.dispatch("podcast.submit", "okul-a", {
                 "job_id": JOB_ONE,
                 "source_id": "x",
+                "source_key": "ders.pdf",
                 "user_id": USER_ID,
                 "format": "tek_ogretici",
             })
@@ -213,6 +233,7 @@ class SubmitTests(CapabilityTestCase):
             self.assertEqual(self.error_code("podcast.submit", {
                 "job_id": JOB_TWO,
                 "source_id": "ikinci",
+                "source_key": "ikinci.pdf",
                 "user_id": USER_ID,
             }), "busy")
         finally:
@@ -223,6 +244,7 @@ class SubmitTests(CapabilityTestCase):
         self.assertEqual(self.error_code("podcast.submit", {
             "job_id": JOB_ONE,
             "source_id": "x",
+            "source_key": "ders.pdf",
             "user_id": USER_ID,
         }), "internal")
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from src import capabilities, config, jobs, pipeline
 from src.protocol import CapabilityError
 
+SCHOOL = "okul-a"
+
 
 class FakeResult:
     def __init__(self, mp3: list, scripts: list, duration: float) -> None:
@@ -61,10 +63,15 @@ def wait_for(store: jobs.JobStore, job_id: str, wanted: tuple, deadline_secs: fl
 
 
 def submit_job(source_id: str, job_format=None) -> dict:
-    payload = {"job_id": jobs.new_job_id(), "source_id": source_id, "user_id": "ogretmen-1"}
+    payload = {
+        "job_id": jobs.new_job_id(),
+        "source_id": source_id,
+        "source_key": source_id,
+        "user_id": "ogretmen-1",
+    }
     if job_format is not None:
         payload["format"] = job_format
-    return capabilities.dispatch("podcast.submit", "okul-a", payload)
+    return capabilities.dispatch("podcast.submit", SCHOOL, payload)
 
 
 class LifecycleTestCase(unittest.TestCase):
@@ -74,8 +81,8 @@ class LifecycleTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="podcast-dongu-")
         self.root = Path(self._tmp.name)
         self.media_root = self.root / "medya"
-        self.media_root.mkdir(parents=True, exist_ok=True)
-        (self.media_root / "ders.pdf").write_bytes(b"%PDF-1.4\n")
+        (self.media_root / SCHOOL).mkdir(parents=True, exist_ok=True)
+        (self.media_root / SCHOOL / "ders.pdf").write_bytes(b"%PDF-1.4\n")
         self.output_root = self.root / "cikti"
         self._stores: list = []
 

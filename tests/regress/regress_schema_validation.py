@@ -134,6 +134,7 @@ class SchemaValidationRegression(unittest.TestCase):
             {
                 "job_id",
                 "source_id",
+                "source_key",
                 "format",
                 "state",
                 "stage",

@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pipeline-path", default=os.environ.get("PODCAST_PIPELINE_PATH", DEFAULT_PIPELINE))
     parser.add_argument("--media-root", default=os.environ.get("PODCAST_MEDIA_ROOT", DEFAULT_MEDIA))
     parser.add_argument("--source", default=DEFAULT_SOURCE)
+    parser.add_argument("--source-key", default="")
     parser.add_argument("--format", default="duz_okuma")
     parser.add_argument("--job-root", default=os.path.join(os.getcwd(), "out", "smoke", "jobs"))
     parser.add_argument("--output-root", default=os.path.join(os.getcwd(), "out", "smoke", "output"))
@@ -74,8 +75,9 @@ def main() -> int:
     submitted = capabilities.dispatch(
         "podcast.submit",
         SMOKE_SCHOOL,
-        {"job_id": job_id, "source_id": args.source, "user_id": SMOKE_USER,
-         "format": args.format},
+        {"job_id": job_id, "source_id": args.source,
+         "source_key": args.source_key or args.source,
+         "user_id": SMOKE_USER, "format": args.format},
     )
     print(f"[smoke] is verildi: {job_id} eta={submitted['eta_secs']}s", flush=True)
 
