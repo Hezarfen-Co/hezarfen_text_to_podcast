@@ -970,7 +970,9 @@ değilse her koşu her adımı baştan yapar (ölçülen `script` adımı tek ba
 > `hezarfen_backend_hezarfen-data`) buna dayanır. Betik ayrıca gerçek adları
 > `podman inspect hezarfen-backend`ten **okur** ve `HEZARFEN_NET` /
 > `HEZARFEN_DATA_VOLUME` olarak geçirir. Elle `podman compose up` yapan
-> operatör **önce `podman volume ls` / `podman network ls` ile doğrulamalıdır.**
+> operatör **önce `podman volume ls` / `podman network ls` ile doğrulamalıdır**;
+> ayrıca `bridge` profilli olduğu için komut **`--profile product`** taşımalıdır,
+> yoksa servis sessizce atlanır.
 
 ### Sağlık compose'da, Containerfile'da DEĞİL
 
@@ -987,7 +989,8 @@ tahmindir ve ilk gerçek koşudan sonra ayarlanmalıdır.
 Ev şablonu (chatbot) `:local` kullanıyor ve her build aynı etiketi eziyor —
 **dönülecek bir imaj kalmıyor**. Burada `run-stack.ps1` her build'i
 `localhost/hezarfen-podcast:<yyyyMMdd-HHmmss>` olarak etiketler **ve**
-`:current` işaretini oraya taşır; `compose.yaml` `:current` kullanır.
+`:current` işaretini oraya taşır; `compose.yaml` varsayılan olarak `:current`
+kullanır (`${HEZARFEN_TAG:-current}`).
 
 ```powershell
 podman images localhost/hezarfen-podcast --format "{{.Tag}} {{.ID}} {{.CreatedSince}}"
@@ -1000,6 +1003,17 @@ Geri alma **yeniden build etmez**: `podman tag` + `compose up -d
 --force-recreate`. `--force-recreate` şarttır — etiket **adı** değişmediği için
 compose "değişiklik yok" deyip container'ı bırakabilir.
 
+`bridge` servisi artık **`profiles: ["product"]`** taşır: ağır servis (8 GB
+`mem_limit`) kazara bir `podman compose up` ile kalkmasın diye. Profili
+`run-stack.ps1`, `rollback.ps1`, systemd unit'i ve CI deploy'un hepsi geçer;
+profilsiz bir `up` servisi **atlar** (sessizce hiçbir şey kalkmaz).
+
+**Sunucuda etiket `stack.env`'den gelir.** Deploy, o build'in SHA'sını
+`~/hezarfen_text_to_podcast/stack.env` içine `HEZARFEN_TAG` olarak yazar;
+compose interpolasyonu onu `localhost/hezarfen-podcast:<sha>` yapar. Yani
+Windows'taki `:current` işareti ile sunucudaki SHA etiketi **aynı mekanizmanın**
+iki ucudur: env dosyası yoksa `:current`, varsa SHA.
+
 ### Kaynak sınırları — ÖLÇÜLMEDİ
 
 `mem_limit: 8g`, `cpus: 4.0`. Adım 1'deki `2g` sahte hat içindi; artık ~4 GB'lık
@@ -1007,6 +1021,109 @@ ağırlık yükleniyor. **Bu iki sayı ölçüm değildir.** Ölçülen tek şey
 **disk** boyutudur (e5-large 2156,99 MB + faster-whisper 1459,67 MB +
 supertonic 382,72 MB); RSS ölçülmedi ve üçünün **aynı anda** yüklü olup
 olmadığı da bilinmiyor. **İlk gerçek konteyner koşusundan sonra ayarlanmalıdır.**
+
+CI deploy'unun kapasite tabanı (RAM ≥ 8192 MB) bu tavana **bağlıdır**: tavan
+ölçümle düzeltilirse taban da onunla gelmelidir. `tests/` bu satırları okumaz,
+yani ikisi arasındaki tutarsızlığı yalnız insan fark eder.
+
+### CI deploy (GitHub Actions)
+
+`.github/workflows/main.yml` (`name: VPS deploy`) kardeş servislerle **aynı üç
+işli şekli** taşır: `Validate ∥ Build and test -> Deploy`. Amaç "hata toparlama
+ucuz olsun": düşen bir deploy, süiti yeniden koşmadan tekrar denenebilir.
+
+| iş | ne zaman | ne yapar |
+|---|---|---|
+| `Validate` | push→`main` | `pip install -r requirements.txt`, `compileall -q src tests`, `python -m src.main --validate` |
+| `Build and test` | push→`main` | hat checkout'u (`PIPELINE_REPO`) + `unittest discover` + **3 sabit tohumlu** fuzz kampanyası + (bilgilendirme) değişken tohum + yorum/docstring/ASCII denetimi + sır taraması, sonra `docker build -f Containerfile`; `release` artefaktı = imaj tarball'ı + `compose.yaml` + unit + `tag` (30 gün) |
+| `Deploy` | ikisi de yeşilse (push), ya da elle (dispatch) | SSH ile yukarıdaki artefaktı sunucuya kurar |
+
+**Hangi olayda hangi iş:**
+
+- **push → `main`**: `Validate` + `Build and test` paralel; ikisi de yeşilse
+  `Deploy` **otomatik** koşar. Yani **yeşil bir push servisi kendiliğinden
+  günceller** — bu bilinçli bir seçim, RAG'ın "elle kapı" duruşunun tersi:
+  podcast servisi GPU'ya bağlı bir ürün kapısı taşımıyor, sığmadığı makinede ise
+  deploy **reddediyor** (aşağıdaki kapasite kapısı).
+- **push → başka branch**: hiçbir iş koşmaz (push kapısı yalnız `main`).
+- **pull_request**: yalnız `test.yml` koşar; kapı kümesi `Build and test` ile
+  **aynıdır** (unittest + 3 fuzz + denetimler + sır taraması). Push tetiği
+  `test.yml`'den **kaldırıldı**: aynı kapı iki dosyada iki kez koşmasın.
+  Yeni bir kapı eklerken **iki dosyayı birlikte** güncelle.
+- **`workflow_dispatch`** (Actions → Run workflow): süit koşmaz; `Build and
+  test` işi **yeşil olan en yeni** push koşusunun artefaktı indirilip deploy
+  edilir. Yeni bir değişiklik için değil, "şu anki yeşil sürümü yeniden kur"
+  içindir.
+
+Deploy ne yapar (sırayla): paketin bütünlüğünü doğrula → SSH anahtarı kur →
+`~/hezarfen_text_to_podcast/` altına dört dosyayı çıkar → operatörün
+`hezarfen_text_to_podcast.env` (0600) dosyasını **oku/chmod et, asla yazma** →
+**kapasite ön kontrolü** → podman + compose sağlayıcı kontrolü → backend
+`/ai/certificate` ucu cevap veriyor mu → `podman load` → tag rotasyonu
+(`current_tag`→`previous_tag`) + `stack.env`'e `HEZARFEN_TAG` → compose modeli
+çözülüyor mu (`podman compose … config`) → unit'i kur, `daemon-reload`, enable,
+**restart** → servisin **kendi** `--health`'i geçene kadar bekle → çalışan
+konteynerin imajı bu build mi → yetmezse `previous_tag`e **geri dön** (ilk
+deploy'da `down`, `-v` **yok**: hacimler korunur) → bağımsız son doğrulama.
+
+Kapı, servisin **kendisinden** gelir; port yok, köprü dışarı dial-out eder:
+
+```bash
+podman exec hezarfen-podcast-bridge python -m src.main --health   # 0 saglikli, 1 sagliksiz
+```
+
+**Ön koşullar (operatörün bir kez yapacağı işler — workflow bunları yapamaz):**
+
+1. Repo secret'ları **`SSH_PRIVATE_KEY` / `SSH_HOST` / `SSH_USER`** (backend ve
+   frontend deploy'unun kullandığı üç isim). Deploy başka sır okumaz; hiçbir sır
+   workflow dosyasına yazılmaz.
+2. Repo değişkeni **`PIPELINE_REPO`** (+ özel depo ise `PIPELINE_TOKEN`):
+   `vendor/` `.gitignore`'dadır ve `Containerfile` `COPY vendor/pipeline` yapar,
+   yani hat kaynağı olmadan **imaj derlenemez**. Yerelde karşılığı
+   `pwsh -File deploy/setup-pipeline.ps1`.
+3. Sunucuda `loginctl enable-linger <kullanıcı>` (kullanıcı unit'leri için).
+4. Sunucuda podman + bir compose sağlayıcı.
+5. `~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env` (0600) —
+   iskelet: `deploy/hezarfen_text_to_podcast.env.example`; **anahtarların tam
+   listesi** depo kökündeki `.env.example`. Dosya sunucuda **elle** yazılır;
+   deploy onu oluşturmaz, ezmez (yoksa nedeniyle birlikte reddeder).
+6. `podcast-models` hacmi **dolu** (~3,9 GB). Ağırlıklar imaja girmez;
+   `HF_HUB_OFFLINE=1` ile eksikse hat **açık hata** verir.
+7. Backend köprüsü açık ve `AI_SHARED_TOKEN` iki tarafta **aynı** — deploy bunu
+   konteynere dokunmadan önce `/ai/certificate` ile kontrol eder. `AI_BRIDGE_HOST`
+   / `AI_BACKEND_URL` backend'in **güncel** adını ve portunu göstermeli
+   (`hezarfen_backend`, 7656); adlar 2026-09-14'te tireli hâlden bu hâle geçti.
+
+**Kapasite kapısı (rag ile aynı desen, sayılar bu servisin):** deploy,
+`MemAvailable >= 8192 MB` ve `disk >= 12 GB` istemezse **nedeniyle birlikte
+reddeder, hiçbir şeye dokunmaz**:
+
+- **8192 MB RAM** — `compose.yaml`'daki `mem_limit: 8g` konteynerin **kendi**
+  tavanıdır; host bu tavanı karşılayamıyorsa 45 dakikalık gerçek iş yarıda
+  OOM'lanır ya da canlı stack sıkıştırılır. (Tavanın kendisi **ölçüm değil**;
+  ölçülen tek şey ~3,9 GB'lık ağırlık hacmi. İlk gerçek koşudan sonra ikisi
+  birlikte ayarlanmalı.)
+- **12 GB disk** — aynı anda ~3,9 GB ağırlık + ~3 GB imaj (podman deposu) +
+  ~3 GB `tar.gz` (deploy dizini) ≈ 10 GB geçici yük; 12 GB bu toplamın tavanı.
+
+> Ölçülmüş bir uyarı: kardeş RAG deploy'u 2026-09-15'te aynı geliştirme
+> sunucusunda **6 466 MB boşta RAM** ölçtü ve 12 GB'lık kapısından bu yüzden
+> geçemiyor. Podcast'in 8192 MB'lık kapısı da o makinede **geçmez**; bu
+> bilinçlidir — daha küçük bir host'ta otomatik başlatmak, canlı stack'i RAM
+> için sıkıştırıp karşılığında yarıda ölen işler üretirdi.
+
+**Sağlayıcı notu (ölçüldü, bu makinede podman-compose 1.6.0):** `--env-file`
+sağlayıcıda **tek değerli**dir, yani iki `--env-file` verildiğinde yalnız
+**sonuncusu** okunur (ölçüldü: `podman compose --env-file a --env-file b config`
+→ `AI_SHARED_TOKEN` yok, çünkü `b` kazanır). Deploy bu yüzden unit'i restart
+etmeden **önce** `podman compose … config` ile modeli çözer ve çözemezse
+**hiçbir şeye dokunmadan** açık hata verir. Çözüm, iki dosyayı okuyabilen bir
+sağlayıcıdır: `podman compose version` hangisinin kullanıldığını söyler
+(docker-compose sağlayıcısı `--env-file`'ı tekrarlanabilir kabul eder). Unit'in
+`ExecStart`'ı iki dosyayı da `--env-file` ile geçer (aile sözleşmesi).
+
+Yerel/Windows yolu **değişmedi**: `deploy/OKU.md` ve `deploy/*.ps1`. Sunucunun
+elle kurulum özeti OKU.md → **"Sunucu (Linux VPS) — OTOMATIK deploy"**.
 
 ## BİLİNEN EKSİKLER / SONRAKİ ADIM
 

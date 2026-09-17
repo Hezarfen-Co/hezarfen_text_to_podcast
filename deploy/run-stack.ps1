@@ -163,7 +163,7 @@ try {
     Write-Host "[stack] imaj degismedi ($currentId) - yeni surum etiketi ACILMADI"
   }
 
-  & $PODMAN compose up -d
+  & $PODMAN compose --profile product up -d
   if ($LASTEXITCODE -ne 0) { throw "podcast compose up basarisiz." }
 } finally { Pop-Location }
 

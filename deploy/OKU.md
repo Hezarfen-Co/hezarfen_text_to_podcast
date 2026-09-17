@@ -137,7 +137,8 @@ pwsh -File deploy/run-stack.ps1 -Root D:\baska    # arama kokunu degistir
 
 Ev şablonu `:local` kullanıyor, her build aynı etiketi eziyor, **geri dönüş yok.**
 Biz her build'i `localhost/hezarfen-podcast:<yyyyMMdd-HHmmss>` olarak etiketler
-**ve** `:current` işaretini oraya taşırız; compose `:current` kullanır.
+**ve** `:current` işaretini oraya taşırız; compose **env dosyası yokken**
+`:current` kullanır (`${HEZARFEN_TAG:-current}`).
 
 ```powershell
 pwsh -File deploy/rollback.ps1 -List            # etiketler + hangisi :current
@@ -151,9 +152,17 @@ Etiketleri listeleyen **tek satırlık yol** (betik gerekmez):
 podman images localhost/hezarfen-podcast --format "{{.Tag}} {{.ID}} {{.CreatedSince}}"
 ```
 
-Geri alma **yeniden build etmez**: `podman tag` + `compose up -d --force-recreate`
-(saniyeler). `--force-recreate` şart — etiket adı aynı kaldığı için compose
-"değişiklik yok" deyip container'ı bırakabilir.
+Geri alma **yeniden build etmez**: `podman tag` + `compose --profile product up -d
+--force-recreate` (saniyeler). `--force-recreate` şart — etiket adı aynı kaldığı
+için compose "değişiklik yok" deyip container'ı bırakabilir. `--profile product`
+da şart: `bridge` servisi **profil ile** işaretlidir (ağır servis kazara bir
+`up` ile kalkmasın diye) ve profilsiz bir `up` onu **atlar**.
+
+> **Sunucuda etiket başka yerden gelir.** `~/hezarfen_text_to_podcast/stack.env`
+> (deploy sahipli, yalnız `HEZARFEN_TAG`) imaj etiketini belirler; compose bunu
+> `localhost/hezarfen-podcast:${HEZARFEN_TAG:-current}` diye okur. Yani env
+> dosyası yokken davranış bu bölümdeki gibidir (`:current`), sunucuda ise
+> daima o build'in SHA'sıdır.
 
 ---
 
@@ -495,12 +504,14 @@ Adı yanlışsa compose **ayağa kalkmaz**.
 > hacmin gerçek adı **çalışan bir sistemde doğrulanamadı**. Varsayılan
 > `hezarfen_backend_hezarfen-data`, `run-stack.ps1`in backend'i
 > `-p hezarfen_backend` ile kaldırdığı varsayımına dayanır. Elle
-> `podman compose up` yapıyorsan **önce doğrula**:
+> `podman compose --profile product up` yapıyorsan **önce doğrula**:
 > ```powershell
 > podman volume ls  ; podman network ls
 > $env:HEZARFEN_DATA_VOLUME = "<gercek-ad>"
 > $env:HEZARFEN_NET         = "<gercek-ag>"
 > ```
+> `--profile product` atlanırsa servis **sessizce kalkmaz** (profilli servis
+> profilsiz `up` ile atlanır); `podman ps` boş kalır.
 
 ---
 
@@ -561,8 +572,8 @@ Elle: `podman exec hezarfen-podcast-bridge python -m src.main --health`
 ## Durdurma / temizlik
 
 ```powershell
-cd C:\PROJECTS\podcast\hezarfen_podcast_service ; podman compose down
-podman compose down -v          # podcast-jobs / out / kayit / models de SILINIR
+cd C:\PROJECTS\podcast\hezarfen_podcast_service ; podman compose --profile product down
+podman compose --profile product down -v   # podcast-jobs / out / kayit / models de SILINIR
 ```
 
 Diğer repolar kendi dizinlerinde (`podman compose down`); backend
@@ -585,6 +596,42 @@ required variable AI_SHARED_TOKEN is missing a value
 Bu ölçüldü (2026-09-01, Podman 5.8.6). `.env` dosyası compose tarafından
 kendiliğinden okunur ve sorunu tamamen kapatır; `.env` `.gitignore`'dadır.
 `deploy/rollback.ps1` ayrıca kendi kapısını koşar ve eksikse açık hata verir.
+
+## Sunucu (Linux VPS) — OTOMATIK deploy
+
+Bu dosya Windows/WSL2 yolunu anlatır; üretim sunucusunda yığıtı **GitHub Actions**
+kurar: `main`'e yeşil bir push `Validate ∥ Build and test -> Deploy` akışını
+koşar ve servisi SSH ile günceller. İnsan tarafında yapılacak **tek seferlik**
+işler (workflow bunları yapamaz):
+
+| # | Koşul | Doğrulama |
+|---|---|---|
+| 1 | Repo secret'ları `SSH_PRIVATE_KEY` / `SSH_HOST` / `SSH_USER` | Actions → Settings → Secrets |
+| 2 | Repo değişkeni `PIPELINE_REPO` (+ özel depo ise `PIPELINE_TOKEN`): hat kaynağı yoksa **imaj derlenemez**, çünkü `Containerfile` `COPY vendor/pipeline` yapar | Actions → Variables |
+| 3 | `loginctl enable-linger <kullanıcı>` (kullanıcı unit'leri için) | `loginctl show-user <u> --property=Linger` |
+| 4 | podman + bir compose sağlayıcı | `podman compose version` |
+| 5 | `~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env` (0600) — iskelet `deploy/hezarfen_text_to_podcast.env.example`, anahtarların tamamı depo kökündeki `.env.example` | `ls -l` → `-rw-------` |
+| 6 | `podcast-models` hacmi **dolu** (~3,9 GB; ağırlıklar imaja girmez, `HF_HUB_OFFLINE=1` eksikse açık hata verir) | `podman volume ls` + `podman exec hezarfen-podcast-bridge ls /models` |
+| 7 | Backend köprüsü açık ve `AI_SHARED_TOKEN` iki tarafta **aynı** | `curl -fsS http://127.0.0.1:7656/ai/certificate` |
+| 8 | Kapasite: **≥ 8192 MB boşta RAM ve ≥ 12 GB disk**. Servis `mem_limit: 8g` ile koşar (ağırlıklar ~3,9 GB); altında kalırsa 45 dakikalık iş OOM ile ölür ve deploy **nedeniyle birlikte** reddeder | `free -m`, `df -h ~` |
+
+Sunucuda yığıt `~/hezarfen_text_to_podcast/` altında yaşar ve dosyaları
+**yalnız deploy** kurar: `compose.yaml`, `hezarfen_text_to_podcast_compose.service`,
+`tag`, `current_tag`/`previous_tag`, `stack.env` (yalnız `HEZARFEN_TAG`).
+`hezarfen_text_to_podcast.env` **operatörün** dosyasıdır; deploy onu okur,
+`chmod 0600` yapar, **asla yazmaz**.
+
+Kapı: yığıtın sağlıklı olduğu `python -m src.main --health` ile ölçülür —
+konteyner **içinde** koşar, yani port gerekmez:
+
+```bash
+podman exec hezarfen-podcast-bridge python -m src.main --health   # 0 saglikli, 1 sagliksiz
+```
+
+Yetmezse deploy önceki `tag`e döner; ilk deploy başarısız olursa yığıt
+durdurulur ama hacimler (`-v` **yok**) korunur.
+
+---
 
 ## SUNUCU YENİDEN BAŞLADIĞINDA — tek seferlik zorunlu ayar
 

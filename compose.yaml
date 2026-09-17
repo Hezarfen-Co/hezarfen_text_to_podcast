@@ -5,14 +5,22 @@ services:
       dockerfile: Containerfile
       args:
         KUR_AGIR: ${KUR_AGIR:-1}
-    image: localhost/hezarfen-podcast:current
+    # HEZARFEN_TAG deploy tarafindan yazilan stack.env'den gelir (--env-file);
+    # laptopta/Windows'ta run-stack.ps1 `:current` isaretini kullanir, yani
+    # env dosyasi yokken davranis eskisi gibi kalir.
+    image: localhost/hezarfen-podcast:${HEZARFEN_TAG:-current}
     container_name: hezarfen-podcast-bridge
+    # AGIR servis (8 GB mem_limit, ~3,9 GB agirlik): ciplak `podman compose up`
+    # ile kalkmaz, `--profile product` ister. Unit ve deploy bu profili gecer;
+    # deploy/run-stack.ps1 ve deploy/rollback.ps1 de gecer. Kazara bir `up`,
+    # canli stack'in RAM'ini sikistirmasin diye boyle.
+    profiles: ["product"]
     init: true
     command: ["python", "-m", "src.bridge"]
     environment:
-      AI_BRIDGE_HOST: hezarfen-backend
+      AI_BRIDGE_HOST: hezarfen_backend
       AI_BRIDGE_PORT: "8090"
-      AI_BACKEND_URL: http://hezarfen-backend:8080
+      AI_BACKEND_URL: http://hezarfen_backend:7656
       AI_SHARED_TOKEN: ${AI_SHARED_TOKEN:?AI_SHARED_TOKEN gerekli}
       AI_TLS_SERVER_NAME: localhost
       AI_SERVICE_NAME: podcast

@@ -1,7 +1,14 @@
+# PR kapisi. Push kapisi main.yml'dedir (Validate || Build and test -> Deploy):
+# ayni kapiyi iki dosyada iki kez kosturmamak icin push tetigi BURADAN
+# kaldirildi. Boylece her olayda her kapi TAM BIR KEZ kosar.
+#
+# Kapi listesi (main.yml'in `Build and test` isiyle AYNI kume):
+#   unittest discover + 3 sabit tohumlu fuzz kampanyasi + (bilgilendirme)
+#   degisken tohum + yorum/docstring/ASCII denetimi + sir taramasi.
+# Yeni bir kapi eklerken IKI dosyayi birlikte guncelle.
 name: test
 
 on:
-  push:
   pull_request:
 
 jobs:

@@ -95,7 +95,7 @@ if ($LASTEXITCODE -eq 0) {
 
 Push-Location $podcast
 try {
-  & $PODMAN compose up -d --force-recreate --no-build
+  & $PODMAN compose --profile product up -d --force-recreate --no-build
   if ($LASTEXITCODE -ne 0) { throw "compose up basarisiz." }
 } finally { Pop-Location }
 

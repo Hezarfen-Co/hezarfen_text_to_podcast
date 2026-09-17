@@ -1,0 +1,548 @@
+# VPS deploy, compose-style, kardes servislerle ayni sekil (hata toparlama ucuz olsun):
+#
+#   Validate        —  tum modullerin derleme kontrolu + uygulama dogrulamasi
+#                      (`python -m src.main --validate`), kendi runner'inda.
+#   Build and test  —  bagimliliklar + unittest suiti + sabit tohumlu fuzz
+#                      kampanyalari + kaynak denetimleri (yorum/docstring/ASCII,
+#                      sir taramasi), sonra repo Containerfile'indan imaj (ENV
+#                      blogu dagitim varsayilanlarinin TEK kaynagidir) ve imaj
+#                      tarball'i + compose dosyalari kosunun artefakti olarak
+#                      yuklenir.
+#   Deploy          —  push'ta OTOMATIK: SSH ile imaji yukle, deploy sahipli
+#                      stack.env'in HEZARFEN_TAG'ini bu build'e cevir, unit'i
+#                      kur, servisin KENDI `--health` kapisini gecir, olmazsa
+#                      onceki tag'e don, sonra bagimsiz dogrula. Yani yesil bir
+#                      push servisi kendiliginden gunceller.
+#
+# Validate ile Build and test paralel kosar; Deploy ikisi de yesilse calisir.
+# Yeni bir push ayni ref'teki Validate/Build'i iptal eder; ucustaki Deploy'u
+# ASLA iptal etmez (iki deploy ic ice girerse stack karisir).
+#
+# Bolunmenin amaci toparlama hikayesi:
+#   * Deploy adimi dusen bir kosuda "Re-run failed jobs" SADECE ~1 dakikalik
+#     deploy isini yeniden kosar — imaj hala kosunun artefaktinda.
+#   * workflow_dispatch (Actions -> Run workflow, ya da
+#     `gh workflow run main.yml --ref main`) suiti kosmadan en yeni yesil
+#     build'in artefaktini deploy eder.
+#
+# PR kapisi bu dosyada DEGIL: test.yml `pull_request` ile kosar. Boylece her
+# kapi her olayda TAM BIR KEZ kosar — push -> burasi, PR -> test.yml.
+#
+# Bir seferlik on kosullar (workflow'un erisimi disinda):
+#   * repo secret'lari SSH_PRIVATE_KEY / SSH_HOST / SSH_USER — backend ve
+#     frontend deploy'unun kullandigi uc isim;
+#   * repo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri):
+#     vendor/ gitignore'dadir ve Containerfile `COPY vendor/pipeline` yapar,
+#     yani hat kaynagi olmadan imaj DERLENEMEZ;
+#   * sunucuda `loginctl enable-linger <user>` (kullanici unit'leri icin);
+#   * sunucuda podman + bir compose saglayici (deploy ikisini de kontrol eder);
+#   * operatorun ~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env (0600)
+#     dosyasi (iskelet: deploy/hezarfen_text_to_podcast.env.example);
+#   * sunucuda podcast-models hacmi DOLU (~3,9 GB agirlik): agirliklar imaja
+#     GIRMEZ ve HF_HUB_OFFLINE=1 ile eksikse hat ACIK hata verir;
+#   * BACKEND tarafi acik olmali: AI_SHARED_TOKEN iki tarafta AYNI ve backend
+#     /ai/certificate cevapliyor olmali — deploy bunu konteynere dokunmadan
+#     once kontrol eder.
+
+name: VPS deploy
+
+on:
+  push:
+    branches:
+      - main
+  # Elle yeniden deploy kapisi — yukaridaki baslik yorumuna bakin.
+  workflow_dispatch:
+
+# Deploy serilestirmesi workflow'da degil deploy isinde: yeni bir push, ucustaki
+# VPS degisimine dokunmadan bayat Validate/Build'i iptal edebilmeli.
+
+env:
+  # systemd kullanici unit'i. Bkz. deploy/hezarfen_text_to_podcast_compose.service.
+  SERVICE: hezarfen_text_to_podcast_compose
+  # Deploy, SSH kullanicisinin home'u altindaki bu alt dizinde yasar ($HOME
+  # sunucuda cozulur, yani kullanici degisince yol da onunla gelir).
+  DEPLOY_SUBDIR: hezarfen_text_to_podcast
+  # Koprunun ayar dosyasi; deploy yalniz varligini kontrol eder, yazmaz.
+  ENV_FILE_NAME: hezarfen_text_to_podcast.env
+  # Sertifika ucu: backend'in QUIC kopru sertifikasi (HTTP, backend'in host
+  # portu). Kopru sertifikayi HER baglanmada buradan yeniden ceker.
+  CERT_PATH: /ai/certificate
+  # Hazir kapisi butcesi (saniye): `--health` kokleri, hatti ve backend'e KAYDI
+  # denetler; gercek hatta model yukleme + QUIC el sikismasi zaman alir.
+  READY_TIMEOUT: "300"
+
+jobs:
+  validate:
+    name: Validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}-validate
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Containerfile ile ayni satir (python:3.10-slim).
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install --requirement requirements.txt
+      - name: Compile every module
+        run: python -m compileall -q src tests
+      # `--validate` hatti IMPORT ETMEZ ve varsayilan `simulate` modda yolunu
+      # okumaz; bu yuzden vendor/pipeline burada ARANMAZ. Hat kaynagini okuyan
+      # tek test (regress_format_vocabulary) Build isinde kosar.
+      - name: Validate the service
+        run: python -m src.main --validate
+
+  build:
+    name: Build and test
+    # Pushes only: elle yeniden deploy suiti tekrar odemek yerine en yeni yesil
+    # artefakti kullanir.
+    if: github.event_name == 'push'
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}-build
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Hat deposunu vendor/pipeline icine al
+        if: vars.PIPELINE_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PIPELINE_REPO }}
+          ref: ${{ vars.PIPELINE_REF || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: vendor/pipeline
+
+      - name: Hat kaynagi var mi
+        run: |
+          if [ -f vendor/pipeline/script/plan.py ]; then
+            echo "hat kaynagi VAR - format sozlesmesi testleri kosacak"
+          else
+            echo "::warning::vendor/pipeline YOK. regress_format_vocabulary.py'nin"
+            echo "::warning::3 testi DUSECEK - bu testler format sozlugunu hattin"
+            echo "::warning::script/plan.py ve router/cli.py dosyalariyla karsilastirir."
+            echo "::warning::Cozum: depo degiskeni PIPELINE_REPO'yu ayarlayin"
+            echo "::warning::(ozel depo ise PIPELINE_TOKEN sirri da gerekir)."
+          fi
+
+      # Containerfile `COPY vendor/pipeline /app/pipeline` yapar: kaynak yoksa
+      # imaj DERLENEMEZ. Derinlerde anlamsiz bir COPY hatasi yerine nedeni
+      # burada soyle — eksik parca sunucuda degil BURADA patlamali.
+      - name: Hat kaynagi imaj icin zorunlu
+        run: |
+          set -euo pipefail
+          if [ ! -f vendor/pipeline/router/hat.py ]; then
+            echo "vendor/pipeline/router/hat.py yok; Containerfile onu imaja kopyalar, yani imaj derlenemez." >&2
+            echo "CI: depo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri) ayarlanmali." >&2
+            echo "Yerelde: pwsh -File deploy/setup-pipeline.ps1" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pip install --requirement requirements.txt
+
+      # Bozuk bir build sunucuya ASLA ulasmamali: unittest suiti, fuzz
+      # kampanyalari ve kaynak denetimleri burada kosar.
+      - name: Test paketi
+        run: python -m unittest discover -s tests -t . --verbose
+
+      - name: Fuzzing kampanyasi (sabit tohumlar, kapi)
+        run: |
+          set -e
+          for seed in 1 2 3; do
+            echo "--- tohum $seed ---"
+            python tools/fuzz_test.py --cases 20000 --seed "$seed"               --quiet --fail-on-finding
+          done
+
+      - name: Fuzzing kampanyasi (degisken tohum, bilgilendirme)
+        continue-on-error: true
+        run: |
+          seed="${GITHUB_RUN_NUMBER:-0}"
+          echo "kosuya ozgu tohum: $seed"
+          if ! python tools/fuzz_test.py --cases 20000 --seed "$seed"                  --quiet --fail-on-finding; then
+            echo "::warning::Degisken tohum yeni bir girdi buldu."
+            echo "::warning::Bulguyu tools/fuzz_test.py --seed $seed ile yeniden uret,"
+            echo "::warning::tests/fuzz/ icine regresyon testi ekle."
+          fi
+
+      - name: Yorum ve ASCII disi karakter denetimi
+        run: |
+          set -e
+          if grep -rlP --include='*.py' '[^\x00-\x7F]' src tests tools ; then
+            echo "::error::src/tests/tools icinde ASCII disi karakter var"; exit 1
+          fi
+          python - <<'PY'
+          import ast, io, pathlib, sys, tokenize
+          hata = []
+          for p in list(pathlib.Path("src").glob("**/*.py")) + \
+                   list(pathlib.Path("tests").glob("**/*.py")) + \
+                   list(pathlib.Path("tools").glob("**/*.py")):
+              with tokenize.open(p) as f:
+                  for tok in tokenize.generate_tokens(f.readline):
+                      if tok.type == tokenize.COMMENT:
+                          hata.append(f"{p}:{tok.start[0]} yorum")
+              t = ast.parse(io.open(p, encoding="utf-8").read())
+              for n in ast.walk(t):
+                  if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                    ast.AsyncFunctionDef)) and ast.get_docstring(n):
+                      hata.append(f"{p}:{getattr(n,'lineno',0)} docstring")
+          if hata:
+              print("::error::Python kodunda yorum/docstring bulundu (depo kurali: sifir)")
+              for h in hata[:20]:
+                  print("  ", h)
+              sys.exit(1)
+          print("yorum/docstring: sifir")
+          PY
+
+      - name: Sir taramasi
+        run: |
+          if grep -rInE 'sk-[A-Za-z0-9]{10,}' --exclude-dir=vendor --exclude-dir=.git . ; then
+            echo "::error::Depoda API anahtari deseni bulundu"; exit 1
+          fi
+          echo "sir taramasi temiz"
+
+      # Laptop ve CI ayni Containerfile'i kullanir: ENV blogu ne diyorsa o
+      # gonderilir, ayri bir CI ikizi yok. Etiket = $GITHUB_SHA, yani deploy'un
+      # stack.env'e yazacagi HEZARFEN_TAG ile AYNI.
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          docker build -f Containerfile -t localhost/hezarfen-podcast:$GITHUB_SHA .
+
+      - name: Stage the release bundle
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          docker save localhost/hezarfen-podcast:$GITHUB_SHA | gzip > stage/hezarfen_text_to_podcast.tar.gz
+          cp compose.yaml deploy/hezarfen_text_to_podcast_compose.service stage/
+          echo -n "$GITHUB_SHA" > stage/tag
+          # Sunucuda kurulacak her sey burada olmali; eksik parca burada,
+          # sunucuda degil, patlar.
+          test -f stage/hezarfen_text_to_podcast.tar.gz
+          test -f stage/compose.yaml
+          test -f stage/hezarfen_text_to_podcast_compose.service
+          test -f stage/tag
+          ls -lh stage
+
+      # Deploy isi (ve elle yeniden deploy) bunu tuketir. 30 gun, dispatch
+      # kapisinin geri uzanma penceresidir.
+      - name: Upload the release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: stage
+          retention-days: 30
+
+  deploy:
+    name: Deploy
+    needs: [validate, build]
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    # Push: yalniz validate VE build yesilse — ikisi de sunucuyu kapilar.
+    # Dispatch: iki CI isi bilerek atlanir (if'lerine bakin) ve `always()`
+    # bu atlamanin bu kapidan gecmesini engeller.
+    if: >-
+      always() &&
+      ((needs.validate.result == 'success' && needs.build.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' &&
+        needs.validate.result == 'skipped' &&
+        needs.build.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    steps:
+      # Push deploy'u bu kosunun urettigi ve kapiladigi surumu alir.
+      - name: Fetch this run's release
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: stage
+
+      # Elle yeniden deploy, BUILD isi yesil olan en yeni kosuyu alir — en yeni
+      # tamamen yesil kosuyu degil: bir kosu saglik kapisinda dusmus olabilir
+      # ama build'i tam da geri almak istedigimiz surumdur.
+      - name: Find the newest green build
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=""
+          for rid in $(gh run list --workflow main.yml --branch main --event push --limit 15 --json databaseId --jq '.[].databaseId'); do
+            if [ "$(gh run view "$rid" --json jobs --jq '.jobs[] | select(.name=="Build and test") | .conclusion')" = "success" ]; then
+              run_id=$rid
+              break
+            fi
+          done
+          if [ -z "$run_id" ]; then
+            echo 'no run on main has a green Build-and-test job (or its artifact has expired)' >&2
+            exit 1
+          fi
+          echo "redeploying the release from run $run_id"
+          echo "run_id=$run_id" >> "$GITHUB_ENV"
+
+      - name: Fetch the green release
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: stage
+          run-id: ${{ env.run_id }}
+          github-token: ${{ github.token }}
+
+      # Dispatch yolu gunler oncesine ait bir artefakt indirebilir; sunucuya
+      # dokunmadan once paketin butun oldugunu yeniden kontrol et.
+      - name: Check the release is complete
+        run: |
+          set -euo pipefail
+          test -f stage/hezarfen_text_to_podcast.tar.gz
+          test -f stage/compose.yaml
+          test -f stage/hezarfen_text_to_podcast_compose.service
+          test -f stage/tag
+
+      - name: Install SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} > ~/.ssh/known_hosts
+
+      - name: Upload the release
+        run: |
+          set -euo pipefail
+          ssh_target="${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}"
+
+          # Sunucunun login shell'i bash degil, ssh bu betigi ona verirdi;
+          # `bash -s` betigi stdin'den alir, login shell yalniz tek duz komut
+          # gorur.
+          ssh "$ssh_target" "bash -se -- '$DEPLOY_SUBDIR'" <<'REMOTE'
+          set -euo pipefail
+          case "$1" in
+            ''|/*|*..*)
+              echo "Refusing a broad deploy subdirectory: '$1'" >&2
+              exit 1
+              ;;
+          esac
+          deploy_path=$HOME/$1
+          # Bu dizin operatorun hezarfen_text_to_podcast.env dosyasini, compose
+          # dosyalarini ve tag dosyalarini tutar; hicbiri toptan silinmez.
+          mkdir -p -- "$deploy_path"
+          REMOTE
+          # stdin paketi tasiyor, betik tasiyamaz; cikarma yine bash -c ile
+          # cunku login shell bash degil ve $HOME'u genisletmez. Sunucuya yalniz
+          # dort deploy dosyasi kurulur.
+          tar -C stage -czf - hezarfen_text_to_podcast.tar.gz compose.yaml hezarfen_text_to_podcast_compose.service tag | ssh "$ssh_target" "bash -c 'exec tar -xzf - -C \"\$HOME/\$1\"' -- '$DEPLOY_SUBDIR'"
+
+      - name: Load the image and restart the service
+        run: |
+          set -euo pipefail
+          ssh_target="${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}"
+
+          # bash -s, yukaridakiyle ayni sebeple: login shell bu betigi asla
+          # gormemeli.
+          ssh "$ssh_target" "bash -se -- '$DEPLOY_SUBDIR' '$SERVICE' '$ENV_FILE_NAME' '$CERT_PATH' '$READY_TIMEOUT'" <<'REMOTE'
+          set -euo pipefail
+          deploy_path=$HOME/$1
+          service=$2
+          env_file=$deploy_path/$3
+          cert_path=$4
+          ready_timeout=$5
+          # Konteyner adi compose.yaml'dan: container_name hezarfen-podcast-bridge.
+          container=hezarfen-podcast-bridge
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          # compose.yaml calisma dizininden cozulur: unit'in ExecStart'i
+          # WorkingDirectory tasir ama rollback'in compose up'i ve ilk deploy'un
+          # down'i tam buradan kosar.
+          cd -- "$deploy_path"
+
+          # Hicbir sey oynamadan once oku: ayar dosyasi operatorun, sunucuda
+          # elle bir kez yazilir (iskelet:
+          # deploy/hezarfen_text_to_podcast.env.example). Deploy onu asla
+          # olusturmaz, ezmez.
+          if [ ! -f "$env_file" ]; then
+            echo "missing $env_file — create it (0600) from deploy/hezarfen_text_to_podcast.env.example" >&2
+            exit 1
+          fi
+          chmod 0600 -- "$env_file"
+
+          # KAPASITE ON KONTROLU — yetmezse canli stack'i OOM ile dusurmek
+          # yerine burada, nedeniyle birlikte reddet:
+          #   RAM  : compose `mem_limit: 8g` konteynerin KENDI tavani; host
+          #          bunu karsilayamiyorsa 45 dakikalik gercek is yarida
+          #          OOM'lanir (agirliklar ~3,9 GB, RSS olculmedi).
+          #   DISK : ~3,9 GB agirlik hacmi + ~3 GB imaj + ~3 GB tar.gz ayni
+          #          anda ~10 GB ister; 12 GB bu toplamin tavanidir.
+          avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+          disk_gb=$(df -BG --output=avail "$deploy_path" | tail -1 | tr -dc '0-9')
+          if [ "$avail_mb" -lt 8192 ] || [ "$disk_gb" -lt 12 ]; then
+            echo "refusing to deploy: ${avail_mb} MB RAM available (need >= 8192) and ${disk_gb} GB disk (need >= 12)." >&2
+            echo 'the service caps itself at 8 GiB (compose mem_limit) and loads ~3.9 GB of weights; below that floor the job is OOM-killed mid-run, or the live stack is squeezed instead.' >&2
+            exit 1
+          fi
+
+          # Rootless podman + compose saglayici; uc adim sonra ciplak
+          # command-not-found yerine cozumu soyle.
+          command -v podman >/dev/null || {
+            echo "podman not found — install podman and a compose provider (e.g. dnf install podman podman-compose)" >&2
+            exit 1
+          }
+          podman compose version >/dev/null 2>&1 || {
+            echo "'podman compose' unavailable — install a compose provider (podman-compose or docker-compose)" >&2
+            exit 1
+          }
+
+          # On kosul: backend'in QUIC koprusu acik olmali — sertifika ucu bunun
+          # kaniti ve kopru sertifikayi ona her baglanmada ihtiyac duyar.
+          served_cert=$(curl -fsS "http://127.0.0.1:7656$cert_path" 2>/dev/null) || true
+          case "$served_cert" in
+            *certificate_pem*) ;;
+            *)
+              echo "backend $cert_path did not answer with a certificate — is the AI bridge enabled (AI_QUIC_ADDR=0.0.0.0:8090)?" >&2
+              exit 1
+              ;;
+          esac
+
+          # BU build'in imajini yukle ve build'in damgaladigi tag'i oku
+          # (build zamani ile deploy zamani neyin gittiginde anlasmali).
+          gunzip -c "$deploy_path/hezarfen_text_to_podcast.tar.gz" | podman load
+          tag=$(cat -- "$deploy_path/tag")
+
+          # Tag rotasyonu: previous_tag geri donus hedefidir (ilk deploy'da
+          # yok); current_tag su an calismasi gerekeni kaydeder.
+          if [ -f "$deploy_path/current_tag" ]; then
+            cp -- "$deploy_path/current_tag" "$deploy_path/previous_tag"
+          fi
+          printf '%s\n' "$tag" > "$deploy_path/current_tag"
+
+          # stack.env deploy sahipli (operatorun ayar dosyasindan farkli):
+          # yalniz imaj tag'ini tasir ve --env-file sirasi HEZARFEN_TAG'de onu
+          # kazanan yapar.
+          printf 'HEZARFEN_TAG=%s\n' "$tag" > "$deploy_path/stack.env"
+
+          # Konteynere DOKUNMADAN once compose modeli cozulebiliyor mu: iki
+          # --env-file'i tek deger sanan saglayicilar (podman-compose 1.6) ya da
+          # okunamayan bir compose dosyasi, unit restart edildikten SONRA degil
+          # burada, eski konteyner hala ayaktayken patlasin.
+          podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" config >/dev/null || {
+            echo "the compose model does not resolve — check the env files and the provider, nothing was changed" >&2
+            exit 1
+          }
+
+          chmod 0644 -- "$deploy_path/compose.yaml" "$deploy_path/hezarfen_text_to_podcast_compose.service"
+          # Imaj tarball'i yalniz tasiyiciydi; imaj artik podman deposunda.
+          rm -f -- "$deploy_path/hezarfen_text_to_podcast.tar.gz"
+
+          compose_up() {
+            podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" up -d --no-build
+          }
+          rollback() {
+            if [ -f "$deploy_path/previous_tag" ]; then
+              prev=$(cat -- "$deploy_path/previous_tag")
+              printf 'HEZARFEN_TAG=%s\n' "$prev" > "$deploy_path/stack.env"
+              printf '%s\n' "$prev" > "$deploy_path/current_tag"
+              compose_up
+              echo "rolled back to $prev" >&2
+            else
+              # Ilk deploy: geri donulecek imaj yok, yari ayakta stack'i
+              # durdur. `-v` YOK — podcast-jobs / podcast-out / podcast-kayit /
+              # podcast-models hacimlari korunur (is durumu ve uretilen ses
+              # diskte kalmali).
+              podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" down
+              echo 'first deploy failed; stack stopped, volumes kept' >&2
+            fi
+          }
+
+          # Unit surumle birlikte gelir: yeni kurulmus bir kutuda ilk deploy'a
+          # kadar unit yoktur ve degisen unit onu gerektiren compose ile iner.
+          mkdir -p -- "$HOME/.config/systemd/user"
+          install -m 0644 -- "$deploy_path/hezarfen_text_to_podcast_compose.service" "$HOME/.config/systemd/user/$service.service"
+          systemctl --user daemon-reload
+
+          # Unit RemainAfterExit'li bir oneshot: aktif (exited) unit'te `start`
+          # no-op olurdu — her deploy ExecStart'i yeniden kosmak icin restart
+          # eder. Dusen bir restart (kotu interpolasyon, saglayici aksakligi)
+          # yine de asagidaki saglik kapisina ulasmali: karari o verir.
+          systemctl --user enable -- "$service"
+          systemctl --user restart "$service" || true
+
+          # HAZIR kapisi servisin KENDINDEN gelir: `python -m src.main --health`
+          # (compose healthcheck'i de budur). Servis PORT ACMAZ, disari dial-out
+          # eder; --health kokler yazilabilir mi, gercek modda hat yuklenebiliyor
+          # mu ve kopru backend'e KAYITLI mi diye bakar. Ucunden biri eksikse
+          # cikis kodu 1'dir. Butce READY_TIMEOUT saniye; her yoklama konteynerde
+          # yeni bir Python baslattigi icin dongu TAKVIM saatine gore durur.
+          ready_ok=0
+          deadline=$(( $(date +%s) + ready_timeout ))
+          while :; do
+            if podman exec "$container" python -m src.main --health >/dev/null 2>&1; then
+              ready_ok=1
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready_ok" -ne 1 ]; then
+            echo "the bridge never became healthy (python -m src.main --health failed); rolling back" >&2
+            podman exec "$container" python -m src.main --health >&2 || true
+            podman logs --tail 30 "$container" 2>&1 >&2 || true
+            rollback
+            exit 1
+          fi
+
+          # Eski bir stack de cevap verebilir; calisan konteyner BU build'in
+          # imaji olmali, yoksa geri donulur.
+          image=$(podman inspect -f '{{.Config.Image}}' "$container")
+          case "$image" in
+            *"$tag"*) ;;
+            *)
+              echo "the bridge is healthy, but the container runs '$image' — not this build ($tag); rolling back" >&2
+              rollback
+              exit 1
+              ;;
+          esac
+          echo 'hezarfen_text_to_podcast_compose is up'
+          REMOTE
+
+      # Bagimsiz son kontrol: cevap veren konteyner hala guncel tag'in olmali ve
+      # kopru saglikli kalmali.
+      - name: Verify the service
+        run: |
+          set -euo pipefail
+          ssh_target="${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}"
+          ssh "$ssh_target" "bash -se -- '$DEPLOY_SUBDIR'" <<'REMOTE'
+          set -euo pipefail
+          deploy_path=$HOME/$1
+          container=hezarfen-podcast-bridge
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          cd -- "$deploy_path"
+          tag=$(cat -- "$deploy_path/current_tag")
+          image=$(podman inspect -f '{{.Config.Image}}' "$container")
+          case "$image" in
+            *"$tag"*) ;;
+            *)
+              echo "container runs '$image', not the current tag '$tag'" >&2
+              exit 1
+              ;;
+          esac
+          status=$(podman inspect -f '{{.State.Status}}' "$container")
+          [ "$status" = "running" ] || { echo "container status is '$status', not running" >&2; exit 1; }
+          podman exec "$container" python -m src.main --health || {
+            echo "the bridge reports unhealthy" >&2
+            exit 1
+          }
+          echo 'bridge healthy, container is this build'
+          REMOTE
+
+      - name: Cleaning
+        run: rm -rf ~/.ssh

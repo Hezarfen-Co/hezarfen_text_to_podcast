@@ -85,9 +85,9 @@ class Config:
     def __init__(self, require_token: bool = True) -> None:
         self.log_level = env_str("LOG_LEVEL", DEFAULT_LOG_LEVEL)
         set_log_level(self.log_level)
-        self.host = env_str("AI_BRIDGE_HOST", "hezarfen-backend")
+        self.host = env_str("AI_BRIDGE_HOST", "hezarfen_backend")
         self.port = env_int("AI_BRIDGE_PORT", 8090, 1, 65535)
-        self.backend_url = env_str("AI_BACKEND_URL", "http://hezarfen-backend:8080").rstrip("/")
+        self.backend_url = env_str("AI_BACKEND_URL", "http://hezarfen_backend:7656").rstrip("/")
         self.server_name = env_str("AI_TLS_SERVER_NAME", "localhost")
         self.tls_fingerprint = (
             env_str("AI_TLS_FINGERPRINT", "").strip().lower().replace(":", "")

@@ -1,0 +1,45 @@
+# systemd KULLANICI unit'i: podcast koprusunu podman compose ile calistirir.
+# %h/hezarfen_text_to_podcast icinde beklenen dosyalar:
+#   compose.yaml                              bu repodan (deploy artefaktindan)
+#   hezarfen_text_to_podcast.env              0600, deploy/hezarfen_text_to_podcast.env.example'dan
+#                                             ELLE yazilir — otomasyon olusturmaz/ezmez
+#   stack.env                                 deploy sahipli; HEZARFEN_TAG tasir
+#   podcast-models hacmi                      ~3,9 GB agirlik (imaja GIRMEZ)
+#
+# Unit `--no-build` ile baslar, yani imaj sunucuda zaten olmali:
+#   podman compose --profile product build     # burada derle
+#   podman load -i image.tar                   # ya da hazir imaji yukle
+#
+# KAPASITE ON KOSULU: servis 8 GB `mem_limit` ile kosar ve calisma aninda
+# ~3,9 GB agirlik yukler; yarim bos bir makinede 45 dakikalik gercek is OOM ile
+# olur. Deploy isi bu esigi (MemAvailable >= 8192 MB, disk >= 12 GB) konteynere
+# dokunmadan once uygular; elle kurulumda operatur ayni esigi gozetmeli.
+#
+# Once TAM BIR KEZ:  loginctl enable-linger <kullanici>   (kullanici unit'leri icin)
+#
+# Sadece ortam degiskeni degistiginde yeniden baslatma (ExecStart'i yeniden
+# kosar, ortami degisen konteyneri yeniden olusturur):
+#   systemctl --user restart hezarfen_text_to_podcast_compose
+
+[Unit]
+Description=Hezarfen podcast bridge (text-to-podcast, hab/2 dial-out)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/hezarfen_text_to_podcast
+# Sonraki --env-file cakisan anahtarda kazanir: once operatorun ayar dosyasi,
+# sonra deploy sahipli stack.env (HEZARFEN_TAG).
+ExecStart=/usr/bin/podman compose --profile product --env-file %h/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env --env-file %h/hezarfen_text_to_podcast/stack.env up -d --no-build
+# Ayar dosyalari burada da gerekli: compose'un `AI_SHARED_TOKEN` girdisi
+# `${AI_SHARED_TOKEN:?...}` ile ZORUNLUDUR ve interpolasyon `down` icin de
+# cozulur — dosyasiz `down` "required variable is missing" ile duser.
+# -v yok: podcast-jobs / podcast-out / podcast-kayit / podcast-models hacimlari
+# stop'ta yasamali (is durumu ve uretilen ses diskte kalir).
+ExecStop=/usr/bin/podman compose --profile product --env-file %h/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env --env-file %h/hezarfen_text_to_podcast/stack.env down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
