@@ -1034,9 +1034,20 @@ ucuz olsun": düşen bir deploy, süiti yeniden koşmadan tekrar denenebilir.
 
 | iş | ne zaman | ne yapar |
 |---|---|---|
-| `Validate` | push→`main` | `pip install -r requirements.txt`, `compileall -q src tests`, `python -m src.main --validate` |
-| `Build and test` | push→`main` | hat checkout'u (`PIPELINE_REPO`) + `unittest discover` + **3 sabit tohumlu** fuzz kampanyası + (bilgilendirme) değişken tohum + yorum/docstring/ASCII denetimi + sır taraması, sonra `docker build -f Containerfile`; `release` artefaktı = imaj tarball'ı + `compose.yaml` + unit + `tag` (30 gün) |
-| `Deploy` | ikisi de yeşilse (push), ya da elle (dispatch) | SSH ile yukarıdaki artefaktı sunucuya kurar |
+| `Validate` | push→`main` (koşulsuz) | `pip install -r requirements.txt`, `compileall -q src tests`, `python -m src.main --validate` |
+| `Build and test` | push→`main` | **her koşuda**: `unittest discover` + **3 sabit tohumlu** fuzz kampanyası + (bilgilendirme) değişken tohum + yorum/docstring/ASCII denetimi + sır taraması. **`PIPELINE_REPO` tanımlıysa ayrıca**: hat checkout'u + `docker build -f Containerfile` + `release` artefaktı (imaj tarball'ı + `compose.yaml` + unit + `tag`, 30 gün) |
+| `Deploy` | ikisi de yeşilse (push), ya da elle (dispatch) — **ve `PIPELINE_REPO` tanımlıysa** | SSH ile yukarıdaki artefaktı sunucuya kurar |
+
+**`PIPELINE_REPO` tanımlı değilken ne olur — "yeşil ve atıl".** `vendor/`
+`.gitignore`'dadır ve `Containerfile` `COPY vendor/pipeline /app/pipeline`
+yapar, yani hat kaynağı olmadan **imaj derlenemez**. Bu yüzden o durumda imaj
+build'i, staging, artefakt yükleme ve `Deploy` **atlanır**; test kapıları yine
+koşar ve **koşu yeşil kalır** (eksik ön koşul kırmızı bir koşu ya da yanlış bir
+kurulum üretmez). Atıl kalmaz: `Build and test` işi `::warning::` satırları ve
+**koşu özetine** (`$GITHUB_STEP_SUMMARY`) şunu yazar — imaj `PIPELINE_REPO`
+tanımlı olmadığı için derlenemedi, test kapıları koştu, çözüm depo değişkeni
+`PIPELINE_REPO` (+ özel depo ise `PIPELINE_TOKEN`), ayarlanır ayarlanmaz bir
+sonraki `main` push'u derleyip deploy eder.
 
 **Hangi olayda hangi iş:**
 
@@ -1080,7 +1091,9 @@ podman exec hezarfen-podcast-bridge python -m src.main --health   # 0 saglikli, 
 2. Repo değişkeni **`PIPELINE_REPO`** (+ özel depo ise `PIPELINE_TOKEN`):
    `vendor/` `.gitignore`'dadır ve `Containerfile` `COPY vendor/pipeline` yapar,
    yani hat kaynağı olmadan **imaj derlenemez**. Yerelde karşılığı
-   `pwsh -File deploy/setup-pipeline.ps1`.
+   `pwsh -File deploy/setup-pipeline.ps1`. **Bugün tanımlı değil** (depo
+   değişkeni de `PIPELINE_TOKEN` sırrı da yok): koşu yeşil kalır, imaj ve deploy
+   atlanır, uyarı koşu özetinde görünür (yukarıya bkz.).
 3. Sunucuda `loginctl enable-linger <kullanıcı>` (kullanıcı unit'leri için).
 4. Sunucuda podman + bir compose sağlayıcı.
 5. `~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env` (0600) —
