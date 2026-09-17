@@ -4,11 +4,15 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, jobs
+from . import api_engine, config, jobs
 
 MODE_SIMULATE = "simulate"
 MODE_REAL = "real"
 MODES = (MODE_SIMULATE, MODE_REAL)
+
+ENGINE_API = "api"
+ENGINE_LOCAL = "local"
+ENGINES = config.PIPELINE_ENGINES
 
 REAL_STAGES = ("ingest", "scriptler", "quiz", "ses")
 REQUIRED_PIPELINE_FILES = (
@@ -329,10 +333,14 @@ def build_runner(settings: Any) -> tuple[Callable[[jobs.JobContext], None], dict
 def job_secs_for(settings: Any) -> float | None:
     if settings.eta_secs > 0:
         return float(settings.eta_secs)
-    if settings.mode == MODE_REAL:
-        return REAL_ETA_SECS
-    return None
+    if settings.mode != MODE_REAL:
+        return None
+    if settings.engine == ENGINE_API:
+        return api_engine.ETA_SECS
+    return REAL_ETA_SECS
 
 
 def stages_for(settings: Any) -> tuple[str, ...] | None:
-    return REAL_STAGES if settings.mode == MODE_REAL else None
+    if settings.mode != MODE_REAL:
+        return None
+    return api_engine.STAGES if settings.engine == ENGINE_API else REAL_STAGES

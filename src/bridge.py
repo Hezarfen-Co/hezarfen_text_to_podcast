@@ -18,7 +18,7 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ConnectionTerminated, QuicEvent, StreamDataReceived
 
-from . import capabilities, config, jobs, pipeline, protocol
+from . import api_engine, capabilities, config, jobs, pipeline, protocol
 from .protocol import CapabilityError
 
 CERT_FETCH_TIMEOUT_SECS = 10
@@ -356,6 +356,27 @@ def select_runner(
     if settings.mode != pipeline.MODE_REAL:
         config.log("warn", pipeline.FAKE_WARNING)
         return None, settings.has_llm_key
+    if settings.engine == pipeline.ENGINE_API:
+        runner, probe = api_engine.build_runner(settings)
+        config.log(
+            "info",
+            f"API motoru bagli: llm={settings.llm_model} "
+            f"({settings.llm_base_url}) bulut_tts={settings.elevenlabs_model} "
+            f"cikti={settings.output_root}",
+        )
+        if not probe["llm_ready"]:
+            config.log(
+                "error",
+                f"LLM anahtari yok ({probe['llm_reason']}): "
+                "'tek_ogretici' ve 'ogrenci_hoca' reddedilir, 'duz_okuma' kosar",
+            )
+        if not probe["tts_ready"]:
+            config.log(
+                "error",
+                f"Bulut TTS hazir degil ({probe['tts_reason']}): "
+                "her is tts asamasinda net bir hatayla dusecek",
+            )
+        return runner, probe["llm_ready"]
     try:
         runner, probe = pipeline.build_runner(settings)
     except pipeline.PipelineUnavailable as exc:

@@ -23,12 +23,32 @@ ENV_NAMES = (
     "PODCAST_ETA_SECS",
     "PODCAST_MEDIA_ROOT",
     "PODCAST_MODE",
+    "PODCAST_ENGINE",
     "PODCAST_PIPELINE_PATH",
     "PODCAST_OUTPUT_ROOT",
     "PODCAST_LEDGER_DB",
     "PODCAST_CHAPTER_LIMIT",
+    "PODCAST_CHAPTER_CHARS",
+    "PODCAST_MIN_TEXT_CHARS",
+    "PODCAST_OCR_LANG",
+    "PODCAST_OCR_PAGE_MIN_CHARS",
     "PODCAST_TTS_ENGINE",
-    "DEEPSEEK_API_KEY",
+    "PODCAST_RETENTION_DAYS",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+    "LLM_EXTRA_JSON",
+    "LLM_TIMEOUT_S",
+    "LLM_MAX_ATTEMPTS",
+    "LLM_RETRY_BASE_S",
+    "LLM_RETRY_MAX_S",
+    "ELEVENLABS_API_KEY",
+    "ELEVENLABS_BASE_URL",
+    "ELEVENLABS_MODEL",
+    "ELEVENLABS_VOICE_ID",
+    "ELEVENLABS_LANGUAGE",
+    "ELEVENLABS_OUTPUT_FORMAT",
+    "ELEVENLABS_TIMEOUT_S",
     "PODCAST_TEST_DEGISKENI",
 )
 
@@ -186,6 +206,20 @@ class ConfigDefaultsTests(EnvIsolatedTestCase):
         self.assertEqual(settings.max_jobs, 8)
         self.assertEqual(settings.chapter_limit, 1)
         self.assertEqual(settings.tts_engine, "supertonic-3")
+        self.assertEqual(settings.engine, config.PIPELINE_ENGINE_DEFAULT)
+        self.assertEqual(settings.chapter_chars, 6000)
+        self.assertEqual(settings.min_text_chars, 200)
+        self.assertEqual(settings.ocr_language, "tur")
+        self.assertEqual(settings.llm_base_url, "https://api.deepseek.com")
+        self.assertEqual(settings.llm_model, "deepseek-chat")
+        self.assertEqual(settings.llm_timeout_secs, 30.0)
+        self.assertEqual(settings.llm_attempts, 3)
+        self.assertEqual(settings.elevenlabs_base_url, "https://api.elevenlabs.io")
+        self.assertEqual(settings.elevenlabs_model, "eleven_flash_v2_5")
+        self.assertEqual(settings.elevenlabs_voice_id, "")
+        self.assertEqual(settings.elevenlabs_language, "tr")
+        self.assertEqual(settings.elevenlabs_output_format, "mp3_44100_128")
+        self.assertFalse(settings.has_elevenlabs_key)
         self.assertFalse(settings.has_token)
         self.assertFalse(settings.has_llm_key)
         self.assertEqual(settings.reconnect_max_secs, 120.0)
@@ -201,13 +235,20 @@ class ConfigDefaultsTests(EnvIsolatedTestCase):
             config.Config(require_token=True)
 
     def test_llm_key_presence_is_recorded_as_a_boolean_not_the_value(self) -> None:
-        os.environ["DEEPSEEK_API_KEY"] = "sk-ornek"
+        os.environ["LLM_API_KEY"] = "sk-ornek"
         settings = config.Config(require_token=False)
         self.assertTrue(settings.has_llm_key)
         self.assertFalse(
             hasattr(settings, "llm_key"),
             "Config LLM anahtarinin degerini saklamamali, yalnizca varligini",
         )
+
+    def test_elevenlabs_key_presence_does_not_store_the_value(self) -> None:
+        os.environ["ELEVENLABS_API_KEY"] = "sk-ornek"
+        settings = config.Config(require_token=False)
+        self.assertTrue(settings.has_elevenlabs_key)
+        self.assertNotIn("sk-ornek", settings.summary())
+        self.assertFalse(hasattr(settings, "elevenlabs_api_key"))
 
 
 class TlsFingerprintTests(EnvIsolatedTestCase):
@@ -265,6 +306,31 @@ class ModeGateTests(EnvIsolatedTestCase):
         os.environ["PODCAST_MODE"] = "yari-gercek"
         with self.assertRaises(config.ConfigError):
             config.Config(require_token=False)
+
+
+class EngineGateTests(EnvIsolatedTestCase):
+    def test_engines_are_exactly_api_and_local_with_api_default(self) -> None:
+        self.assertEqual(config.PIPELINE_ENGINES, ("api", "local"))
+        self.assertEqual(config.PIPELINE_ENGINE_DEFAULT, "api")
+        self.assertEqual(config.Config(require_token=False).engine, "api")
+
+    def test_both_engines_are_accepted(self) -> None:
+        for engine in config.PIPELINE_ENGINES:
+            with self.subTest(engine=engine):
+                os.environ["PODCAST_ENGINE"] = engine
+                self.assertEqual(config.Config(require_token=False).engine, engine)
+
+    def test_unknown_engine_crashes_the_boot_instead_of_falling_back(self) -> None:
+        os.environ["PODCAST_ENGINE"] = "bulut"
+        with self.assertRaises(config.ConfigError):
+            config.Config(require_token=False)
+
+    def test_mode_and_engine_are_independent_axes(self) -> None:
+        os.environ["PODCAST_MODE"] = "simulate"
+        os.environ["PODCAST_ENGINE"] = "local"
+        settings = config.Config(require_token=False)
+        self.assertEqual(settings.mode, "simulate")
+        self.assertEqual(settings.engine, "local")
 
 
 if __name__ == "__main__":

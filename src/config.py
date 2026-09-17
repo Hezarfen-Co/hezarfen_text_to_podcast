@@ -10,6 +10,12 @@ DEFAULT_LOG_LEVEL = "info"
 PIPELINE_MODES = ("simulate", "real")
 PIPELINE_MODE_DEFAULT = "simulate"
 
+PIPELINE_ENGINES = ("api", "local")
+PIPELINE_ENGINE_DEFAULT = "api"
+
+LLM_KEY_ENV_NAME = "LLM_API_KEY"
+ELEVENLABS_KEY_ENV_NAME = "ELEVENLABS_API_KEY"
+
 _active_level = LOG_LEVELS[DEFAULT_LOG_LEVEL]
 
 
@@ -108,12 +114,34 @@ class Config:
         self.eta_secs = env_float("PODCAST_ETA_SECS", 0.0, 0.0, 86400.0)
         self.media_root = _absolute(env_str("PODCAST_MEDIA_ROOT", "/data/files"))
         self.mode = env_choice("PODCAST_MODE", PIPELINE_MODE_DEFAULT, PIPELINE_MODES)
+        self.engine = env_choice("PODCAST_ENGINE", PIPELINE_ENGINE_DEFAULT, PIPELINE_ENGINES)
         self.pipeline_path = env_str("PODCAST_PIPELINE_PATH", "")
         self.output_root = _absolute(env_str("PODCAST_OUTPUT_ROOT", "/data/podcast/out"))
         self.ledger_db = _absolute(env_str("PODCAST_LEDGER_DB", "/data/podcast/router.sqlite"))
         self.chapter_limit = env_int("PODCAST_CHAPTER_LIMIT", 1, -1, 4096)
+        self.chapter_chars = env_int("PODCAST_CHAPTER_CHARS", 6000, 200, 100000)
+        self.min_text_chars = env_int("PODCAST_MIN_TEXT_CHARS", 200, 0, 1000000)
+        self.ocr_language = env_str("PODCAST_OCR_LANG", "tur")
+        self.ocr_page_min_chars = env_int("PODCAST_OCR_PAGE_MIN_CHARS", 40, 0, 100000)
         self.tts_engine = env_str("PODCAST_TTS_ENGINE", "supertonic-3")
-        self.has_llm_key = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+        self.llm_base_url = env_str("LLM_BASE_URL", "https://api.deepseek.com").rstrip("/")
+        self.llm_model = env_str("LLM_MODEL", "deepseek-chat")
+        self.llm_timeout_secs = env_float("LLM_TIMEOUT_S", 30.0, 1.0, 600.0)
+        self.llm_attempts = env_int("LLM_MAX_ATTEMPTS", 3, 1, 10)
+        self.llm_retry_base_secs = env_float("LLM_RETRY_BASE_S", 0.5, 0.05, 60.0)
+        self.llm_retry_max_secs = env_float("LLM_RETRY_MAX_S", 8.0, 0.05, 300.0)
+        self.elevenlabs_base_url = env_str(
+            "ELEVENLABS_BASE_URL", "https://api.elevenlabs.io"
+        ).rstrip("/")
+        self.elevenlabs_model = env_str("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+        self.elevenlabs_voice_id = env_str("ELEVENLABS_VOICE_ID", "")
+        self.elevenlabs_language = env_str("ELEVENLABS_LANGUAGE", "tr")
+        self.elevenlabs_output_format = env_str(
+            "ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128"
+        )
+        self.elevenlabs_timeout_secs = env_float("ELEVENLABS_TIMEOUT_S", 120.0, 5.0, 900.0)
+        self.has_llm_key = bool(os.environ.get(LLM_KEY_ENV_NAME, "").strip())
+        self.has_elevenlabs_key = bool(os.environ.get(ELEVENLABS_KEY_ENV_NAME, "").strip())
         if self.tls_fingerprint and not (
             len(self.tls_fingerprint) == 64
             and all(char in "0123456789abcdef" for char in self.tls_fingerprint)
@@ -138,13 +166,17 @@ class Config:
             f"is_kok={self.job_root} isciler={self.workers} max_is={self.max_jobs} "
             f"asama={self.stage_secs}s "
             f"eta={'otomatik' if self.eta_secs <= 0 else str(self.eta_secs) + 's'} "
-            f"medya_kok={self.media_root} mod={self.mode} "
+            f"medya_kok={self.media_root} mod={self.mode} motor={self.engine} "
             f"hat_yolu={self.pipeline_path if self.pipeline_path else 'TANIMSIZ'} "
             f"cikti_kok={self.output_root} defter={self.ledger_db} "
             f"retention={self.retention_days:g}g "
             f"bolum_limiti={'hepsi' if self.chapter_limit <= 0 else self.chapter_limit} "
             f"tts={self.tts_engine} "
-            f"llm_anahtari={'tanimli' if self.has_llm_key else 'TANIMSIZ'}"
+            f"llm={self.llm_model} llm_anahtari="
+            f"{'tanimli' if self.has_llm_key else 'TANIMSIZ'} "
+            f"bulut_tts={self.elevenlabs_model} bulut_ses="
+            f"{'tanimli' if self.elevenlabs_voice_id else 'TANIMSIZ'} "
+            f"bulut_anahtari={'tanimli' if self.has_elevenlabs_key else 'TANIMSIZ'}"
         )
 
 

@@ -11,7 +11,7 @@ FORMATS = ("tek_ogretici", "ogrenci_hoca", "duz_okuma")
 DEFAULT_FORMAT = "duz_okuma"
 LLM_FORMATS = ("tek_ogretici", "ogrenci_hoca")
 KEYLESS_FORMATS = tuple(name for name in FORMATS if name not in LLM_FORMATS)
-LLM_KEY_NAME = "DEEPSEEK_API_KEY"
+LLM_KEY_NAME = "LLM_API_KEY"
 
 _store: jobs.JobStore | None = None
 _llm_ready = False

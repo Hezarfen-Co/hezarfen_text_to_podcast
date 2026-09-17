@@ -40,7 +40,7 @@ pwsh -File deploy/run-stack.ps1        # 4) dort repoyu sirayla kaldirir + dogru
 
 Bittiğinde: frontend **http://localhost:5173** (`admin` / `admin123`),
 backend **http://localhost:8080**, podcast köprüsü port açmaz —
-kanıtı `podman logs hezarfen-podcast-bridge` içindeki `kayit basarili` satırıdır.
+kanıtı `podman logs hezarfen_text_to_podcast` içindeki `kayit basarili` satırıdır.
 
 ---
 
@@ -545,7 +545,7 @@ hiçbir şey yazmaz; zaman aşımı koymak sağlıklı köprüyü hasta gösteri
 `start_period: 90s` **ölçülmedi**, model yükleme süresine göre seçilmiş bir
 tahmindir; ilk gerçek koşudan sonra ayarlanmalıdır.
 
-Elle: `podman exec hezarfen-podcast-bridge python -m src.main --health`
+Elle: `podman exec hezarfen_text_to_podcast python -m src.main --health`
 (çıkış `0` sağlıklı, `1` sağlıksız). `--health` **asla 2 dönmez** — 2 yalnızca `--validate`'e aittir.
 
 ---
@@ -556,8 +556,8 @@ Elle: `podman exec hezarfen-podcast-bridge python -m src.main --health`
 |---|---|
 | `network hezarfen_backend_default not found` | Backend `-p hezarfen_backend` ile kaldırılmadı ya da hiç ayakta değil. `podman network ls` ile gerçek adı bul, `$env:HEZARFEN_NET`'e yaz. |
 | `volume ... hezarfen-data not found` | Aynı sebep, hacim tarafı. `podman volume ls`. |
-| build: `COPY vendor/pipeline: no such file` | `deploy/setup-pipeline.ps1` çalıştırılmadı. |
-| Boot'ta `exit 2` + `PODCAST_MODE=real ama gercek hat yuklenemedi` | vendor eksik kopyalandı ya da hattın bir bağımlılığı imajda yok. `podman run --rm localhost/hezarfen-podcast:current python -c "import router.hat"` ile tek başına dene. |
+| Imaj hat agaci olmadan DERLENIR (varsayilan `PODCAST_ENGINE=api`). `local` motor istiyorsan `pwsh -File deploy/setup-pipeline.ps1` ile `vendor/pipeline`i indir. |
+| Boot'ta `exit 2` + `PODCAST_MODE=real ama gercek hat yuklenemedi` | **Yalnizca `PODCAST_ENGINE=local` icin**: vendor eksik ya da hattin bir bagimliligi imajda yok. `podman run --rm localhost/hezarfen-podcast:current python -c "import router.hat"` ile tek başına dene. |
 | `ffmpeg/ffprobe bulunamadi: /app/pipeline/tools/bin/ffmpeg.exe` | Sembolik bağ yok. `podman exec ... ls -l /app/pipeline/tools/bin/`. Vendor `tools/bin` ile kopyalandıysa gerçek `.exe`ler bağın üstüne yazılmıştır → `setup-pipeline.ps1`i `-WindowsBinaries` **olmadan** koştur. |
 | TTS: `model dizini yok` / `vocoder.onnx` | `podcast-models` hacmi boş ya da izinler kapalı. `pwsh -File deploy/setup-models.ps1 -Check` |
 | `OSError: ... multilingual-e5-large ... offline` | Ağırlık hacimde yok. `HF_HUB_OFFLINE=1` **bilerek** indirmeyi engelliyor. `setup-models.ps1` koştur; ya da geçici olarak `HF_HUB_OFFLINE=0`. |
@@ -611,7 +611,7 @@ işler (workflow bunları yapamaz):
 | 3 | `loginctl enable-linger <kullanıcı>` (kullanıcı unit'leri için) | `loginctl show-user <u> --property=Linger` |
 | 4 | podman + bir compose sağlayıcı | `podman compose version` |
 | 5 | `~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env` (0600) — iskelet `deploy/hezarfen_text_to_podcast.env.example`, anahtarların tamamı depo kökündeki `.env.example` | `ls -l` → `-rw-------` |
-| 6 | `podcast-models` hacmi **dolu** (~3,9 GB; ağırlıklar imaja girmez, `HF_HUB_OFFLINE=1` eksikse açık hata verir) | `podman volume ls` + `podman exec hezarfen-podcast-bridge ls /models` |
+| 6 | `podcast-models` hacmi **dolu** (~3,9 GB; ağırlıklar imaja girmez, `HF_HUB_OFFLINE=1` eksikse açık hata verir) | `podman volume ls` + `podman exec hezarfen_text_to_podcast ls /models` |
 | 7 | Backend köprüsü açık ve `AI_SHARED_TOKEN` iki tarafta **aynı** | `curl -fsS http://127.0.0.1:7656/ai/certificate` |
 | 8 | Kapasite: **≥ 8192 MB boşta RAM ve ≥ 12 GB disk**. Servis `mem_limit: 8g` ile koşar (ağırlıklar ~3,9 GB); altında kalırsa 45 dakikalık iş OOM ile ölür ve deploy **nedeniyle birlikte** reddeder | `free -m`, `df -h ~` |
 
@@ -625,7 +625,7 @@ Kapı: yığıtın sağlıklı olduğu `python -m src.main --health` ile ölçü
 konteyner **içinde** koşar, yani port gerekmez:
 
 ```bash
-podman exec hezarfen-podcast-bridge python -m src.main --health   # 0 saglikli, 1 sagliksiz
+podman exec hezarfen_text_to_podcast python -m src.main --health   # 0 saglikli, 1 sagliksiz
 ```
 
 Yetmezse deploy önceki `tag`e döner; ilk deploy başarısız olursa yığıt

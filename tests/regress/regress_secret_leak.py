@@ -8,7 +8,7 @@ from src import capabilities, config, jobs
 LLM_CANARY = "kanarya-deepseek-anahtari-9f3a2b"
 TOKEN_CANARY = "kanarya-paylasilan-sir-7c1e8d"
 
-SECRET_NAMES = ("DEEPSEEK_API_KEY", "AI_SHARED_TOKEN")
+SECRET_NAMES = ("LLM_API_KEY", "ELEVENLABS_API_KEY", "AI_SHARED_TOKEN")
 
 ENV_NAMES = (
     "LOG_LEVEL",
@@ -20,6 +20,7 @@ ENV_NAMES = (
     "PODCAST_MEDIA_ROOT",
     "PODCAST_LEDGER_DB",
     "PODCAST_MODE",
+    "PODCAST_ENGINE",
     "PODCAST_PIPELINE_PATH",
     "PODCAST_WORKERS",
     "PODCAST_MAX_JOBS",
@@ -27,7 +28,14 @@ ENV_NAMES = (
     "PODCAST_ETA_SECS",
     "PODCAST_CHAPTER_LIMIT",
     "PODCAST_TTS_ENGINE",
-    "DEEPSEEK_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+    "LLM_EXTRA_JSON",
+    "ELEVENLABS_API_KEY",
+    "ELEVENLABS_BASE_URL",
+    "ELEVENLABS_MODEL",
+    "ELEVENLABS_VOICE_ID",
 )
 
 
@@ -40,7 +48,7 @@ class SecretLeakRegression(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="podcast-sir-")
         self.root = Path(self._tmp.name)
         os.environ["LOG_LEVEL"] = "error"
-        os.environ["DEEPSEEK_API_KEY"] = LLM_CANARY
+        os.environ["LLM_API_KEY"] = LLM_CANARY
         os.environ["AI_SHARED_TOKEN"] = TOKEN_CANARY
         os.environ["PODCAST_JOB_ROOT"] = str(self.root / "isler")
         os.environ["PODCAST_OUTPUT_ROOT"] = str(self.root / "cikti")

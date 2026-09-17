@@ -100,10 +100,24 @@ class ModeGateTests(PipelineTestCase):
     def test_real_mode_uses_the_real_stage_names_and_eta(self) -> None:
         class FakeSettings:
             mode = "real"
+            engine = "local"
             eta_secs = 0.0
 
         self.assertEqual(pipeline.stages_for(FakeSettings), pipeline.REAL_STAGES)
         self.assertEqual(pipeline.job_secs_for(FakeSettings), pipeline.REAL_ETA_SECS)
+
+    def test_api_engine_uses_its_own_stage_names_and_eta(self) -> None:
+        from src import api_engine
+
+        class FakeSettings:
+            mode = "real"
+            engine = "api"
+            eta_secs = 0.0
+
+        self.assertEqual(pipeline.stages_for(FakeSettings), api_engine.STAGES)
+        self.assertEqual(pipeline.job_secs_for(FakeSettings), api_engine.ETA_SECS)
+        self.assertEqual(pipeline.ENGINE_API, "api")
+        self.assertEqual(pipeline.ENGINES, config.PIPELINE_ENGINES)
 
     def test_explicit_eta_overrides_the_mode_default(self) -> None:
         class FakeSettings:

@@ -399,11 +399,29 @@ Dosyanın **var olup olmadığına bakmaz**; varlık denetimini
 `pipeline.resolve_pdf()` yapar ve dosya yoksa iş `failed` +
 `error_code: "source_not_found"` olur.
 
+## İki motor (`PODCAST_ENGINE`)
+
+Gerçek işi iki motordan biri koşar; seçim **yalnızca `.env`** iledir:
+
+| | `api` — **varsayılan** | `local` — bugünkü yol |
+| --- | --- | --- |
+| Ne koşar | Yerli hat: PyMuPDF metin çıkarma (+ gerekirse tesseract OCR) → script (OpenAI-uyumlu LLM; `duz_okuma` LLM'siz) → ElevenLabs HTTP TTS → ffmpeg mux | `router.hat.Hat` (vendored ağaç) |
+| Ağaç gerekir mi | **hayır** (`vendor/pipeline` olmadan imaj derlenir ve koşar) | **evet**; yoksa `real` modda açılış exit 2 |
+| Anahtarlar | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (her iş için), `LLM_API_KEY` (yalnız LLM formatları) | `PODCAST_TTS_ENGINE` + `SES_BULUT_IZINLI`; ağırlık hacmi (~3,9 GB) |
+| Aşamalar | `kaynak → metin → script → tts → mux` | `ingest → scriptler → quiz → ses` |
+| ETA (otomatik) | 300 sn | 2700 sn |
+
+`PODCAST_ENGINE` bilinmeyen bir değer alırsa boot **çöker** (exit 2) — sessizce
+diğer motora düşmez. Eksik anahtar boot'u çökertmez: iş, tts/llm aşamasında
+**net bir hata koduyla** `failed` olur (`tts_key_missing`, `tts_voice_missing`,
+`tts_error`, `tts_timeout`, `tts_bad_audio`, `llm_error`, `llm_unavailable`,
+`llm_timeout`, `llm_empty`); yarım mp3 `done` diye işaretlenmez.
+
 ## Anahtarsız çalışma
 
-Podcast hattı LLM için `DEEPSEEK_API_KEY` ortam değişkenini kullanır. Ev kuralı
-gereği bu **eksik** yapılandırmadır, **yanlış** değil — dolayısıyla boot'u
-çökertmez, yalnızca ilgili özelliği kapatır:
+`api` motoru LLM için `LLM_API_KEY` (OpenAI-uyumlu `LLM_BASE_URL` + `LLM_MODEL`
+ile birlikte) kullanır. Ev kuralı gereği bu **eksik** yapılandırmadır,
+**yanlış** değil — dolayısıyla boot'u çökertmez, yalnızca ilgili özelliği kapatır:
 
 | değer | anlam | anahtarsız |
 | --- | --- | --- |
@@ -411,18 +429,16 @@ gereği bu **eksik** yapılandırmadır, **yanlış** değil — dolayısıyla b
 | `tek_ogretici` | tek anlatıcı | `llm_unavailable` |
 | `ogrenci_hoca` | iki sesli | `llm_unavailable` |
 
-Gerekçe: podcast projesinde `duz_okuma` hattı anahtarsız **sonuna kadar koşar**;
-diğer iki format 12 LLM ajanına bağımlıdır. Kaynak: `C:\PROJECTS\podcast\router\hat.py`
-dosyasının baş yorumu — "LLM isteyen bir adım anahtarsız çağrıldığında ATLANIR ve
-rapora ATLANDI diye YAZILIR; uydurma üretilmez. `duz_okuma` hattı anahtarsız
-SONUNA KADAR koşar."
+Gerekçe: `duz_okuma` **düz okuma**dur — `api` motoru bu formatta LLM'e hiç
+gitmez (metin doğrudan okunur), `local` motorda da anahtarsız sonuna kadar
+koşar. Diğer iki format LLM'e bağlıdır. Hiçbir formatta uydurma içerik üretilmez.
 
 `llm_unavailable` mesajı hangi formatların kullanılabilir olduğunu **söyler**;
 çağıran tarafın tahmin etmesi gerekmez. Açılışta da tek satır log basılır:
 
 ```
-[bridge] acik formatlar: duz_okuma (DEEPSEEK_API_KEY tanimsiz; tek_ogretici, ogrenci_hoca kapali)
-[bridge] acik formatlar: tek_ogretici, ogrenci_hoca, duz_okuma (DEEPSEEK_API_KEY tanimli)
+[bridge] acik formatlar: duz_okuma (LLM_API_KEY tanimsiz; tek_ogretici, ogrenci_hoca kapali)
+[bridge] acik formatlar: tek_ogretici, ogrenci_hoca, duz_okuma (LLM_API_KEY tanimli)
 ```
 
 **Anahtarın kendisi hiçbir yerde loglanmaz, hata mesajına girmez, diske
@@ -440,9 +456,9 @@ değişmelidir.
 
 | Değişken | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `AI_BRIDGE_HOST` | `hezarfen-backend` | QUIC ile bağlanılacak host |
+| `AI_BRIDGE_HOST` | `hezarfen_backend` | QUIC ile bağlanılacak host (backend konteyner adı) |
 | `AI_BRIDGE_PORT` | `8090` | QUIC portu (UDP) |
-| `AI_BACKEND_URL` | `http://hezarfen-backend:8080` | Sertifika için HTTP kökü |
+| `AI_BACKEND_URL` | `http://hezarfen_backend:7656` | Sertifika için HTTP kökü |
 | `AI_SHARED_TOKEN` | **yok** | Backend ile aynı paylaşılan sır. Tanımsızsa köprü açılışta çıkar (exit 2) |
 | `AI_TLS_SERVER_NAME` | `localhost` | Sertifikanın SAN'ı |
 | `AI_SERVICE_NAME` | `podcast` | Hello'daki servis adı |
@@ -458,20 +474,35 @@ değişmelidir.
 | `PODCAST_ETA_SECS` | `0` | Bir işin tahmini süresi (sn). `0` = otomatik (aşama sayısı × `PODCAST_STAGE_SECS`, en az 1). Gerçek hat için `2700` gibi bir değer verilir; aralık `0..86400` |
 | `PODCAST_MEDIA_ROOT` | `/data/files` | `source_id`'nin çözüleceği paylaşılan dosya kökü; backend'in `FILES_PATH` değeriyle **aynı** olmalı |
 | `PODCAST_MODE` | `simulate` | `simulate` \| `real`. Başka değer → exit 2 |
-| `PODCAST_PIPELINE_PATH` | **boş** | Hat kaynağının kökü (içinde `router/hat.py`). `real` modda **zorunlu**; yoksa/bozuksa exit 2 |
+| `PODCAST_ENGINE` | `api` | `api` \| `local`. Başka değer → exit 2 |
+| `PODCAST_CHAPTER_CHARS` | `6000` | `api`: bolum basina en fazla karakter (`200..100000`) |
+| `PODCAST_MIN_TEXT_CHARS` | `200` | `api`: altinda OCR denenir/kalirsa `no_text_layer` |
+| `PODCAST_OCR_LANG` | `tur` | `api`: tesseract dili (`tesseract-ocr-tur`) |
+| `PODCAST_PIPELINE_PATH` | **boş** | Yalnızca `local` motor: hat kaynağının kökü. `real`+`local` için zorunlu; yoksa/bozuksa exit 2 |
 | `PODCAST_OUTPUT_ROOT` | `/data/podcast/out` | `Hat(cikti_koku=...)` — üretilen mp3/script/quiz kökü (kalıcı hacim) |
 | `PODCAST_CHAPTER_LIMIT` | `1` | `Hat(bolum_limiti=...)`. `0` veya `-1` = **hepsi**; aralık `-1..4096` |
-| `PODCAST_TTS_ENGINE` | `supertonic-3` | `Hat(motor_adi=...)` — lokal ONNX motoru |
+| `PODCAST_TTS_ENGINE` | `supertonic-3` | Yalnızca `local` motorun ONNX TTS motoru |
 | `PODCAST_LEDGER_DB` | `/data/podcast/router.sqlite` | `router.kayit.Kayit` defteri: adım önbelleği, resume, LLM bütçe sayacı. compose'ta `/data/podcast/kayit/router.sqlite` (ayrı kalıcı hacim) |
 | `HF_HOME` | *(imajda)* `/models/hf` | HuggingFace önbellek kökü; `podcast-models` hacmi buraya `:ro` bağlanır |
 | `TORCH_HOME` | *(imajda)* `/models/torch` | torch önbellek kökü |
 | `HF_HUB_OFFLINE` | `1` (compose) | HF hub'a **ağ çağrısı yok**. Ağırlık hacimde yoksa açık hata; sessizce 2,2 GB indirilmez |
-| `DEEPSEEK_API_KEY` | **yok** | Yoksa yalnızca `duz_okuma`; boot çökmez |
+| `LLM_BASE_URL` | `https://api.deepseek.com` | `api`: OpenAI-uyumlu LLM ucu (her sağlayıcı, kod değişmez) |
+| `LLM_MODEL` | `deepseek-chat` | `api`: model id |
+| `LLM_API_KEY` | **yok** | `api`: LLM anahtarı. Yoksa yalnızca `duz_okuma`; boot çökmez |
+| `LLM_TIMEOUT_S` | `30` | `api`: tek LLM çağrısının zaman aşımı |
+| `LLM_MAX_ATTEMPTS` | `3` | `api`: 429/5xx/timeout için deneme sayısı |
+| `ELEVENLABS_API_KEY` | **yok** | `api`: bulut TTS anahtarı (yoksa işler `tts_key_missing` ile düşer) |
+| `ELEVENLABS_VOICE_ID` | **boş** | `api`: ses kimliği (yoksa `tts_voice_missing`) |
+| `ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `api`: TTS modeli |
+| `ELEVENLABS_BASE_URL` | `https://api.elevenlabs.io` | `api`: TTS ucu |
+| `ELEVENLABS_LANGUAGE` | `tr` | `api`: `language_code` |
+| `ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | `api`: çıktı biçimi (`pcm_*` 403 verir) |
 
 Yapılandırma kuralı (backend'in kendi kuralı): **yanlış** yapılandırma boot'u
 çökertir (geçersiz port, geçersiz `LOG_LEVEL`, `PODCAST_WORKERS=abc`,
 `PODCAST_MAX_JOBS=0`, eksik token → exit 2); **eksik** yapılandırma yalnızca
-ilgili özelliği sessizce kapatır (`DEEPSEEK_API_KEY`).
+ilgili özelliği sessizce kapatır (`LLM_API_KEY`; `ELEVENLABS_*` eksikse işler
+net hata koduyla düşer, sahte ses üretilmez).
 
 Yorumlu şablon: **`.env.example`**. Kopyala, doldur, `.env` olarak kaydet.
 `.env` `.gitignore`'dadır; `.env.example` kasten izlenir ve `.containerignore`
@@ -499,7 +530,7 @@ pwsh -File deploy/setup-models.ps1   # agirliklar -> podcast-models hacmi
 Copy-Item .env.example .env           # sonra icindeki AI_SHARED_TOKEN'i backend ile AYNI yap
                                       # (ortam degiskeni YETMEZ: compose `down`/`ps` de interpolate eder)
 pwsh -File deploy/run-stack.ps1        # backend -> frontend -> chatbot -> podcast
-podman logs -f hezarfen-podcast-bridge
+podman logs -f hezarfen_text_to_podcast
 ```
 
 ### `--health` neyi denetler
@@ -1080,7 +1111,7 @@ deploy'da `down`, `-v` **yok**: hacimler korunur) → bağımsız son doğrulama
 Kapı, servisin **kendisinden** gelir; port yok, köprü dışarı dial-out eder:
 
 ```bash
-podman exec hezarfen-podcast-bridge python -m src.main --health   # 0 saglikli, 1 sagliksiz
+podman exec hezarfen_text_to_podcast python -m src.main --health   # 0 saglikli, 1 sagliksiz
 ```
 
 **Ön koşullar (operatörün bir kez yapacağı işler — workflow bunları yapamaz):**

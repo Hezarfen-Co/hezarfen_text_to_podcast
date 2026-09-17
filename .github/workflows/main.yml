@@ -14,10 +14,12 @@
 #                      onceki tag'e don, sonra bagimsiz dogrula. Yani yesil bir
 #                      push servisi kendiliginden gunceller.
 #
-# YESIL VE ATIL: PIPELINE_REPO tanimli degilse imaj derlenemez (vendor/pipeline
-# yok, Containerfile ise `COPY vendor/pipeline` yapar) — build'in imaj/staging/
-# artefakt adimlari ve Deploy ATLANIR, test kapilari kosar ve kosu YESIL kalir.
-# Durum sessiz kalmaz: ::warning:: satirlari + kosu ozeti (bkz. on kosullar).
+# HAT KAYNAGI OPSIYONELDIR: imaj vendor/pipeline OLMADAN derlenir ve kosar
+# (Containerfile `COPY vendor /vendor-src` yapar ve agir bagimliliklari kosullu
+# kurar; varsayilan PODCAST_ENGINE=api hicbir zaman hat agaci istemez).
+# PIPELINE_REPO tanimliysa checkout edilir ve lokal motorun torch/easyocr
+# bagimliliklari da kurulur. Her iki durumda da imaj DERLENIR, artefakt yuklenir
+# ve yesil push servisi DEPLOY eder; kosu ozeti hangi kapinin kostugunu yazar.
 #
 # Validate ile Build and test paralel kosar; Deploy ikisi de yesilse calisir.
 # Yeni bir push ayni ref'teki Validate/Build'i iptal eder; ucustaki Deploy'u
@@ -36,11 +38,11 @@
 # Bir seferlik on kosullar (workflow'un erisimi disinda):
 #   * repo secret'lari SSH_PRIVATE_KEY / SSH_HOST / SSH_USER — backend ve
 #     frontend deploy'unun kullandigi uc isim;
-#   * repo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri):
-#     vendor/ gitignore'dadir ve Containerfile `COPY vendor/pipeline` yapar,
-#     yani hat kaynagi olmadan imaj DERLENEMEZ. TANIMLI DEGILSE imaj/staging/
-#     artefakt ve deploy ATLANIR, kosu YESIL kalir; durum uyari + kosu ozetiyle
-#     gorunur olur ve degisken ayarlanir ayarlanmaz bir sonraki push derler;
+#   * repo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri) —
+#     OPSIYONEL: tanimliysa vendor/pipeline checkout edilir ve LOKAL motorun
+#     agir bagimliliklari (torch/transformers/easyocr) imaja kurulur. Tanimli
+#     degilse imaj yine derlenir ve deploy yine kosar; yalnizca lokal motor
+#     gerektiren testler atlanir;
 #   * sunucuda `loginctl enable-linger <user>` (kullanici unit'leri icin);
 #   * sunucuda podman + bir compose saglayici (deploy ikisini de kontrol eder);
 #   * operatorun ~/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env (0600)
@@ -140,17 +142,21 @@ jobs:
       # kaynagini gerektirir. Depo degiskeni TANIMLI DEGILSE asagidaki uc adim
       # (imaj, staging, artefakt) ve deploy ATLANIR; kosu YESIL kalir ama
       # durum GORUNUR olmali (asagidaki adim ::warning:: + kosu ozeti basar).
-      - name: Hat kaynagi var mi
+      # GORUNUR DURUM: hat kaynagi OPSIYONEL. Varsayilan motor `api` oldugu icin
+      # imaj ve deploy bu adimdan BAGIMSIZ kosar; adim yalnizca hangi kapinin
+      # kostugunu kosu ozetine yazar (sessizlik kabul edilmez).
+      - name: Hat kaynagi durumu
         env:
           PIPELINE_REPO: ${{ vars.PIPELINE_REPO }}
         run: |
           set -euo pipefail
           if [ -f vendor/pipeline/script/plan.py ]; then
-            echo "hat kaynagi VAR - format sozlesmesi testleri ve imaj build'i kosacak"
+            echo "hat kaynagi VAR - lokal motor testleri ve lokal bagimliliklar kosacak"
             {
               echo "### Hat kaynagi hazir"
               echo ""
-              echo "\`vendor/pipeline\` checkout edildi: format sozlesmesi testleri ve imaj build'i kosar."
+              echo "`vendor/pipeline` checkout edildi: format sozlesmesi testleri ve lokal motor bagimliliklari kosar."
+              echo "Varsayilan calisma moturu (\`api\`) bundan bagimsizdir; imaj ve deploy her durumda kosar."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -160,30 +166,25 @@ jobs:
             {
               echo "### Hat kaynagi BEKLENIYORDU ama yok"
               echo ""
-              echo "\`PIPELINE_REPO\` tanimli (\`$PIPELINE_REPO\`) fakat \`vendor/pipeline/script/plan.py\` bulunamadi."
-              echo "Imaj build'i ve deploy ATLANDI. \`PIPELINE_REF\` degerini ve depo erisimini (ozel depo ise"
-              echo "\`PIPELINE_TOKEN\`) kontrol edin."
+              echo "`PIPELINE_REPO` tanimli (`$PIPELINE_REPO`) fakat `vendor/pipeline/script/plan.py` bulunamadi."
+              echo "Imaj ve deploy YINE kosar (varsayilan motor `api`); yalnizca lokal motor testleri ve"
+              echo "lokal bagimlilik adimlari atlandi. `PIPELINE_REF` degerini ve depo erisimini kontrol edin."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # PIPELINE_REPO BOS: imaj derlenemez, deploy edilecek bir sey de yok.
-          # Kosu YESIL kalir (test kapilari yine kosar) ama sessiz KALMAZ.
-          echo "::warning::PIPELINE_REPO tanimli degil: hat kaynagi (vendor/pipeline) yok ve"
-          echo "::warning::Containerfile 'COPY vendor/pipeline /app/pipeline' yapar, yani IMAJ DERLENEMEZ."
-          echo "::warning::Bu kosuda test kapilari kostu; imaj build'i, release paketi ve deploy ATLANDI."
-          echo "::warning::regress_format_vocabulary.py'nin 3 testi de kendini atlar (hat kaynagi yok)."
-          echo "::warning::Cozum: depo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri)."
-          echo "::warning::Ayarlanir ayarlanmaz bir sonraki main push'u imaji derler ve servisi deploy eder."
+          echo "::notice::PIPELINE_REPO tanimli degil: hat kaynagi yok."
+          echo "::notice::Varsayilan motor api oldugu icin imaj DERLENIR ve servis DEPLOY EDILIR."
+          echo "::notice::Yalnizca lokal motor (PODCAST_ENGINE=local) ve regress_format_vocabulary testleri atlanir."
           {
-            echo "### Imaj build'i ve deploy ATLANDI - PIPELINE_REPO tanimli degil"
+            echo "### Hat kaynagi yok - varsayilan api motoru yine kosar"
             echo ""
-            echo "Hat kaynagi (\`vendor/pipeline\`) depoda DEGIL (\`.gitignore\`) ve \`Containerfile\`"
-            echo "\`COPY vendor/pipeline /app/pipeline\` yapar: bu degisken olmadan **imaj derlenemez**."
+            echo "Hat kaynagi (`vendor/pipeline`) depoda DEGIL (`.gitignore`) ve `PIPELINE_REPO` tanimli degil."
+            echo "Bu **engel degil**: Containerfile hat agacini opsiyonel kopyalar ve varsayilan"
+            echo "`PODCAST_ENGINE=api` hicbir zaman hat agaci istemez."
             echo ""
-            echo "- Test kapilari (unittest + sabit tohumlu fuzz + yorum/ASCII denetimi + sir taramasi) bu kosuda KOSTU."
-            echo "- Imaj build'i, release paketi ve deploy ATLANDI; kosu bu yuzden YESIL."
-            echo "- Cozum: depo degiskeni \`PIPELINE_REPO\` (ozel depo ise \`PIPELINE_TOKEN\` sirri)."
-            echo "- Ayarlanir ayarlanmaz bir sonraki \`main\` push'u imaji derler ve servisi deploy eder."
+            echo "- Imaj DERLENIR, artefakt yuklenir ve deploy KOSAR."
+            echo "- `regress_format_vocabulary` testleri kendini atlar; lokal motor testleri kosmaz."
+            echo "- Lokal motor isteniyorsa depo degiskeni `PIPELINE_REPO` (+ `PIPELINE_TOKEN`) ayarlanir."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Degisken ayarliysa eksik parca sunucuda degil BURADA patlamali:
@@ -266,7 +267,6 @@ jobs:
       # gonderilir, ayri bir CI ikizi yok. Etiket = $GITHUB_SHA, yani deploy'un
       # stack.env'e yazacagi HEZARFEN_TAG ile AYNI.
       - name: Build the image
-        if: vars.PIPELINE_REPO != ''
         run: |
           set -euo pipefail
           docker build -f Containerfile -t localhost/hezarfen-podcast:$GITHUB_SHA .
@@ -307,14 +307,12 @@ jobs:
     # Dispatch: iki CI isi bilerek atlanir (if'lerine bakin) ve `always()`
     # bu atlamanin bu kapidan gecmesini engeller.
     #
-    # ON KOSUL: PIPELINE_REPO. Degisken yoksa imaj hic DERLENMEZ (build isinin
-    # imaj/staging/artefakt adimlari atlanir), yani deploy edilecek bir surum de
-    # yoktur: bu is o durumda ATLANIR ve kosu YESIL kalir ("yesil ve atil").
-    # Boylece eksik bir on kosul, deploy'u yesil gosterip yanlis seyi kurmaz;
-    # kurulum yerine kosu ozetindeki uyari gorunur olur.
+    # ON KOSUL: yalnizca yesil Validate + Build; PIPELINE_REPO ARTIK GEREKMEZ
+    # (varsayilan `api` motoru hat agacini istemez, imaj her kosuda derlenir).
+    # Lokal motoru kosmak isteyen operator depo degiskenini ayarlar; ayarsizlik
+    # yalnizca lokal motor testlerini atlatir, deploy'u ATLAMAZ.
     if: >-
       always() &&
-      vars.PIPELINE_REPO != '' &&
       ((needs.validate.result == 'success' && needs.build.result == 'success') ||
        (github.event_name == 'workflow_dispatch' &&
         needs.validate.result == 'skipped' &&
@@ -417,8 +415,8 @@ jobs:
           env_file=$deploy_path/$3
           cert_path=$4
           ready_timeout=$5
-          # Konteyner adi compose.yaml'dan: container_name hezarfen-podcast-bridge.
-          container=hezarfen-podcast-bridge
+          # Konteyner adi compose.yaml'dan: container_name hezarfen_text_to_podcast.
+          container=hezarfen_text_to_podcast
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           # compose.yaml calisma dizininden cozulur: unit'in ExecStart'i
           # WorkingDirectory tasir ama rollback'in compose up'i ve ilk deploy'un
@@ -435,18 +433,29 @@ jobs:
           fi
           chmod 0600 -- "$env_file"
 
+          # podman-compose 1.6.0 `--env-file`i TEK DEGER sayar ve verildiginde
+          # YALNIZCA SONUNCUSUNU okur (podman_compose.py:2941-2946): iki bayrak
+          # operatorun ayar dosyasini sessizce dusurur ve `${AI_SHARED_TOKEN:?}`
+          # "required variable is missing" ile reddeder. Bu yuzden operator
+          # degiskenleri ORTAMA alinir, compose'a YALNIZCA stack.env verilir.
+          # (systemd unit'i de ayni sekilde EnvironmentFile kullanir.)
+          set -a
+          . "$env_file"
+          set +a
+
           # KAPASITE ON KONTROLU — yetmezse canli stack'i OOM ile dusurmek
-          # yerine burada, nedeniyle birlikte reddet:
-          #   RAM  : compose `mem_limit: 8g` konteynerin KENDI tavani; host
-          #          bunu karsilayamiyorsa 45 dakikalik gercek is yarida
-          #          OOM'lanir (agirliklar ~3,9 GB, RSS olculmedi).
-          #   DISK : ~3,9 GB agirlik hacmi + ~3 GB imaj + ~3 GB tar.gz ayni
-          #          anda ~10 GB ister; 12 GB bu toplamin tavanidir.
+          # yerine burada, nedeniyle birlikte reddet. Taban VARSAYILAN motorun
+          # (api) gercek ihtiyacindan gelir: torch/easyocr YOK, agirlik YOK;
+          # konteyner birkac yuz MB'dir. (Eski 8192 MB tabani vendored hattin
+          # ~3,9 GB agirliklarindan geliyordu; o yol artik `local` motoru ve
+          # ayni tabani isteyen operator kendi ortamina ekler.)
+          #   RAM  : 2048 MB — api motoru + ffmpeg + ocr icin bol pay.
+          #   DISK : 8 GB — ~1 GB imaj + ~1 GB tar.gz + hacimler.
           avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
           disk_gb=$(df -BG --output=avail "$deploy_path" | tail -1 | tr -dc '0-9')
-          if [ "$avail_mb" -lt 8192 ] || [ "$disk_gb" -lt 12 ]; then
-            echo "refusing to deploy: ${avail_mb} MB RAM available (need >= 8192) and ${disk_gb} GB disk (need >= 12)." >&2
-            echo 'the service caps itself at 8 GiB (compose mem_limit) and loads ~3.9 GB of weights; below that floor the job is OOM-killed mid-run, or the live stack is squeezed instead.' >&2
+          if [ "$avail_mb" -lt 2048 ] || [ "$disk_gb" -lt 8 ]; then
+            echo "refusing to deploy: ${avail_mb} MB RAM available (need >= 2048) and ${disk_gb} GB disk (need >= 8)." >&2
+            echo 'the api engine (default) needs a few hundred MB; below the floor the job would be OOM-killed mid-run or the live stack squeezed instead.' >&2
             exit 1
           fi
 
@@ -485,15 +494,15 @@ jobs:
           printf '%s\n' "$tag" > "$deploy_path/current_tag"
 
           # stack.env deploy sahipli (operatorun ayar dosyasindan farkli):
-          # yalniz imaj tag'ini tasir ve --env-file sirasi HEZARFEN_TAG'de onu
-          # kazanan yapar.
+          # yalniz imaj tag'ini tasir. Operator degiskenleri yukarida ortama
+          # alindi; compose'a verilen TEK --env-file budur.
           printf 'HEZARFEN_TAG=%s\n' "$tag" > "$deploy_path/stack.env"
 
           # Konteynere DOKUNMADAN once compose modeli cozulebiliyor mu: iki
           # --env-file'i tek deger sanan saglayicilar (podman-compose 1.6) ya da
           # okunamayan bir compose dosyasi, unit restart edildikten SONRA degil
           # burada, eski konteyner hala ayaktayken patlasin.
-          podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" config >/dev/null || {
+          podman compose --profile product --env-file "$deploy_path/stack.env" config >/dev/null || {
             echo "the compose model does not resolve — check the env files and the provider, nothing was changed" >&2
             exit 1
           }
@@ -503,7 +512,7 @@ jobs:
           rm -f -- "$deploy_path/hezarfen_text_to_podcast.tar.gz"
 
           compose_up() {
-            podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" up -d --no-build
+            podman compose --profile product --env-file "$deploy_path/stack.env" up -d --no-build
           }
           rollback() {
             if [ -f "$deploy_path/previous_tag" ]; then
@@ -517,7 +526,7 @@ jobs:
               # durdur. `-v` YOK — podcast-jobs / podcast-out / podcast-kayit /
               # podcast-models hacimlari korunur (is durumu ve uretilen ses
               # diskte kalmali).
-              podman compose --profile product --env-file "$env_file" --env-file "$deploy_path/stack.env" down
+              podman compose --profile product --env-file "$deploy_path/stack.env" down
               echo 'first deploy failed; stack stopped, volumes kept' >&2
             fi
           }
@@ -572,7 +581,24 @@ jobs:
               exit 1
               ;;
           esac
-          echo 'hezarfen_text_to_podcast_compose is up'
+          # ${VAR:?} SINIFINA KARSI POZITIF KANIT: konteynerin ORTAMI zorunlu
+          # degiskenleri tasiyor mu? (Iki --env-file tuzagi ya da eksik operator
+          # dosyasi tam olarak burada, sessizce degil, gorunur olur.) Sir
+          # DEGERLERI loglanmaz: yalnizca adları.
+          missing=$(podman exec "$container" sh -c \
+            'for v in AI_SHARED_TOKEN PODCAST_ENGINE; do if [ -z "$(printenv "$v" || true)" ]; then echo "$v"; fi; done' 2>/dev/null || true)
+          if [ -n "$missing" ]; then
+            echo "container env is missing required vars: $(echo "$missing" | tr '\n' ' ') — check $env_file; rolling back" >&2
+            rollback
+            exit 1
+          fi
+          engine=$(podman exec "$container" printenv PODCAST_ENGINE 2>/dev/null || true)
+          tts_missing=$(podman exec "$container" sh -c \
+            'for v in ELEVENLABS_API_KEY ELEVENLABS_VOICE_ID; do if [ -z "$(printenv "$v" || true)" ]; then echo "$v"; fi; done' 2>/dev/null || true)
+          if [ -n "$tts_missing" ]; then
+            echo "warning: container env lacks $(echo "$tts_missing" | tr '\n' ' '): gercek isler tts asamasinda net bir hata ile dusecek (motor=$engine). Operator $env_file icine ekleyip unit'i yeniden baslatmali." >&2
+          fi
+          echo "hezarfen_text_to_podcast_compose is up (PODCAST_ENGINE=$engine)"
           REMOTE
 
       # Bagimsiz son kontrol: cevap veren konteyner hala guncel tag'in olmali ve
@@ -584,7 +610,7 @@ jobs:
           ssh "$ssh_target" "bash -se -- '$DEPLOY_SUBDIR'" <<'REMOTE'
           set -euo pipefail
           deploy_path=$HOME/$1
-          container=hezarfen-podcast-bridge
+          container=hezarfen_text_to_podcast
           export XDG_RUNTIME_DIR=/run/user/$(id -u)
           cd -- "$deploy_path"
           tag=$(cat -- "$deploy_path/current_tag")

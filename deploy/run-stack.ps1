@@ -183,19 +183,19 @@ foreach ($p in 8080, 5173) {
 Write-Host "    podcast kaydi bekleniyor (en fazla 30 sn)..."
 $registered = $false
 for ($i = 0; $i -lt 15; $i++) {
-  $log = (& $PODMAN logs --tail 200 hezarfen-podcast-bridge 2>&1 | Out-String)
+  $log = (& $PODMAN logs --tail 200 hezarfen_text_to_podcast 2>&1 | Out-String)
   if ($log -match "kayit basarili") { $registered = $true; break }
   Start-Sleep -Seconds 2
 }
 if ($registered) {
-  ((& $PODMAN logs --tail 200 hezarfen-podcast-bridge 2>&1 | Out-String) -split "`n" |
+  ((& $PODMAN logs --tail 200 hezarfen_text_to_podcast 2>&1 | Out-String) -split "`n" |
     Where-Object { $_ -match "kayit basarili|GERCEK hat bagli|acik formatlar|SAHTE hat" }) |
     ForEach-Object { Write-Host "    $($_.Trim())" }
   Write-Host "`n[stack] HAZIR. Frontend: http://localhost:5173  (admin / admin123)"
   Write-Host "[stack] geri alma  : pwsh -File deploy/rollback.ps1 -List"
 } else {
   Write-Host "`n[stack] !!! Podcast koprusu KAYIT OLMADI. Son loglar:"
-  & $PODMAN logs --tail 40 hezarfen-podcast-bridge
+  & $PODMAN logs --tail 40 hezarfen_text_to_podcast
   Write-Host "`n[stack] sorun giderme: deploy/OKU.md"
   exit 1
 }

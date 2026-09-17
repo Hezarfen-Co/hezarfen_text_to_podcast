@@ -895,6 +895,112 @@ def _check_pipeline(root: str) -> list[str]:
     return problems
 
 
+def _check_api_engine(root: str) -> list[str]:
+    from . import api_engine, config, jobs, pipeline
+
+    problems: list[str] = []
+
+    if pipeline.ENGINES != ("api", "local"):
+        problems.append(f"motor kumesi beklenenden farkli: {pipeline.ENGINES}")
+    if config.PIPELINE_ENGINE_DEFAULT != pipeline.ENGINE_API:
+        problems.append(f"varsayilan motor api degil: {config.PIPELINE_ENGINE_DEFAULT}")
+
+    previous = os.environ.get("PODCAST_ENGINE")
+    os.environ["PODCAST_ENGINE"] = "gecersiz-motor"
+    try:
+        config.Config(require_token=False)
+        problems.append("gecersiz PODCAST_ENGINE degeri kabul edildi")
+    except config.ConfigError:
+        pass
+    finally:
+        if previous is None:
+            os.environ.pop("PODCAST_ENGINE", None)
+        else:
+            os.environ["PODCAST_ENGINE"] = previous
+
+    mode_previous = os.environ.get("PODCAST_MODE")
+    os.environ["PODCAST_MODE"] = "real"
+    try:
+        settings = config.Config(require_token=False)
+    finally:
+        if mode_previous is None:
+            os.environ.pop("PODCAST_MODE", None)
+        else:
+            os.environ["PODCAST_MODE"] = mode_previous
+    if settings.engine != pipeline.ENGINE_API:
+        problems.append(f"varsayilan motor api olmali, alinan: {settings.engine}")
+    if pipeline.stages_for(settings) != api_engine.STAGES:
+        problems.append(f"api motoru asama adlari yanlis: {pipeline.stages_for(settings)}")
+    if pipeline.job_secs_for(settings) != api_engine.ETA_SECS:
+        problems.append(f"api motoru etasi yanlis: {pipeline.job_secs_for(settings)}")
+    if api_engine.SOURCE_NOT_FOUND != pipeline.SOURCE_NOT_FOUND:
+        problems.append("kaynak hatasi kodu api motorunda farkli")
+    if pipeline.PIPELINE_MODULE in sys.modules:
+        problems.append("api motoru gercek hat modulunu iceri almis")
+
+    media_root = os.path.join(root, "api-medya")
+    os.makedirs(media_root, exist_ok=True)
+    blank = os.path.join(media_root, "bos.pdf")
+    try:
+        import pymupdf
+
+        doc = pymupdf.open()
+        doc.new_page()
+        doc.save(blank)
+        doc.close()
+    except Exception as exc:
+        problems.append(f"metin katmansiz PDF uretilemedi: {type(exc).__name__}: {exc}")
+        return problems
+
+    settings.media_root = media_root
+    settings.output_root = os.path.join(root, "api-cikti")
+    store = jobs.JobStore(
+        root=os.path.join(root, "api-isler"),
+        workers=1,
+        stage_secs=0.0,
+        runner=api_engine.make_runner(settings),
+        stages=api_engine.STAGES,
+        job_secs=1.0,
+        output_root=settings.output_root,
+    )
+    store.start()
+    try:
+        job_id = store.submit("bos.pdf", "duz_okuma")[0]["job_id"]
+        final = _await_state(store, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
+        if final["state"] != jobs.STATE_FAILED:
+            problems.append(f"metin katmani olmayan PDF 'failed' olmadi: {final['state']}")
+        if final["error_code"] != api_engine.NO_TEXT:
+            problems.append(
+                f"metin katmansiz is icin hata kodu yanlis: {final['error_code']}"
+            )
+        if final["audio_id"] is not None or final["audio_ids"]:
+            problems.append("metin katmani olmayan is yine de ses kimligi yazdi")
+    finally:
+        store.shutdown()
+
+    missing = jobs.JobStore(
+        root=os.path.join(root, "api-kayip"),
+        workers=1,
+        stage_secs=0.0,
+        runner=api_engine.make_runner(settings),
+        stages=api_engine.STAGES,
+        job_secs=1.0,
+        output_root=settings.output_root,
+    )
+    missing.start()
+    try:
+        job_id = missing.submit("yok.pdf", "duz_okuma")[0]["job_id"]
+        final = _await_state(missing, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
+        if final["state"] != jobs.STATE_FAILED:
+            problems.append(f"kaynagi olmayan api isi 'failed' olmadi: {final['state']}")
+        if final["error_code"] != api_engine.SOURCE_NOT_FOUND:
+            problems.append(f"kayip kaynak kodu yanlis: {final['error_code']}")
+    finally:
+        missing.shutdown()
+
+    return problems
+
+
 def validate() -> int:
     from . import capabilities, config
 
@@ -907,9 +1013,20 @@ def validate() -> int:
         )
     print(f"[bridge] {capabilities.format_summary(settings.has_llm_key)}", flush=True)
 
-    from . import pipeline
+    from . import api_engine, pipeline
 
-    if settings.mode == pipeline.MODE_REAL:
+    if settings.mode == pipeline.MODE_REAL and settings.engine == pipeline.ENGINE_API:
+        probe = api_engine.probe(settings)
+        print(
+            f"[bridge] api motoru: llm={settings.llm_model} @ {settings.llm_base_url} "
+            f"bulut_tts={settings.elevenlabs_model}",
+            flush=True,
+        )
+        if not probe["llm_ready"]:
+            print(f"[bridge] uyari: {probe['llm_reason']} -> yalnizca 'duz_okuma'", flush=True)
+        if not probe["tts_ready"]:
+            print(f"[bridge] uyari: {probe['tts_reason']}", flush=True)
+    elif settings.mode == pipeline.MODE_REAL:
         try:
             source_root = pipeline.check_pipeline_path(settings.pipeline_path)
         except pipeline.PipelineUnavailable as exc:
@@ -931,6 +1048,7 @@ def validate() -> int:
         problems += _guard("kayit semasi", _check_record_schema, root)
         problems += _guard("kapanma", _check_shutdown, root)
         problems += _guard("gercek hat kablosu", _check_pipeline, root)
+        problems += _guard("api motoru", _check_api_engine, root)
 
     if problems:
         for problem in problems:
@@ -957,16 +1075,30 @@ def _check_writable(root: str, label: str, problems: list[str], notes: list[str]
 
 
 def health() -> int:
-    from . import config, jobs, pipeline
+    from . import api_engine, config, jobs, pipeline
 
     settings = config.load(require_token=False)
     problems: list[str] = []
-    notes: list[str] = [f"mod={settings.mode}"]
+    notes: list[str] = [f"mod={settings.mode}", f"motor={settings.engine}"]
 
     _check_writable(settings.job_root, "is koku", problems, notes)
     _check_writable(settings.output_root, "cikti koku", problems, notes)
 
-    if settings.mode == pipeline.MODE_REAL:
+    if settings.mode == pipeline.MODE_REAL and settings.engine == pipeline.ENGINE_API:
+        probe = api_engine.probe(settings)
+        if probe["llm_ready"]:
+            notes.append(f"llm hazir: {probe['llm_reason']}")
+        else:
+            notes.append(f"llm yok ({probe['llm_reason']}); yalnizca 'duz_okuma' kosar")
+        if probe["tts_ready"]:
+            notes.append(f"bulut tts hazir: {probe['tts_reason']}")
+        else:
+            notes.append(
+                f"bulut tts hazir DEGIL ({probe['tts_reason']}): surec saglikli, ama "
+                "gercek her is tts asamasinda net bir hatayla dusecek"
+            )
+        notes.append(f"acik formatlar: {probe['formats']}")
+    elif settings.mode == pipeline.MODE_REAL:
         try:
             source_root = pipeline.check_pipeline_path(settings.pipeline_path)
             pipeline.load_pipeline(settings.pipeline_path)

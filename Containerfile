@@ -16,47 +16,66 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# tesseract: api motorunun OCR yedegi (metin katmani olmayan slaytlar).
+# tur paketi olmadan Turkce tanima yapilamaz.
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
         ffmpeg \
         ca-certificates \
         libgl1 \
         libglib2.0-0 \
+        tesseract-ocr \
+        tesseract-ocr-tur \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --requirement requirements.txt
 
-COPY vendor/pipeline/requirements.txt ./hat-req/requirements.txt
-COPY vendor/pipeline/requirements-ses.txt ./hat-req/requirements-ses.txt
-COPY vendor/pipeline/requirements-ocr.txt ./hat-req/requirements-ocr.txt
-
-RUN pip install --no-cache-dir \
-        --requirement hat-req/requirements.txt \
-        --requirement hat-req/requirements-ses.txt \
-    && pip install --no-cache-dir \
-        onnxruntime==1.23.2 \
-        numpy==2.2.6 \
-        huggingface_hub==1.27.0
-
-RUN if [ "$KUR_AGIR" = "1" ]; then \
+# Hat kaynagi OPSIYONELDIR (varsayilan motor `api`, vendor/pipeline olmadan
+# derlenir ve kosar). Yalnizca checkout edilmisse lokal motorun agir
+# bagimliliklari kurulur; placeholder `.gitkeep` ile bu blok ATLANIR.
+COPY vendor /vendor-src
+RUN set -eux; \
+    if [ -f /vendor-src/pipeline/router/hat.py ]; then \
+        mkdir -p /app/pipeline; \
+        cp -a /vendor-src/pipeline/. /app/pipeline/; \
         pip install --no-cache-dir \
-            --index-url "$TORCH_INDEX" \
-            --extra-index-url https://pypi.org/simple \
-            torch torchvision \
-        && pip install --no-cache-dir transformers==5.15.0 \
-        && pip install --no-cache-dir --requirement hat-req/requirements-ocr.txt ; \
+            --requirement /vendor-src/pipeline/requirements.txt \
+            --requirement /vendor-src/pipeline/requirements-ses.txt; \
+        pip install --no-cache-dir \
+            onnxruntime==1.23.2 \
+            numpy==2.2.6 \
+            huggingface_hub==1.27.0; \
+        if [ "$KUR_AGIR" = "1" ]; then \
+            pip install --no-cache-dir \
+                --index-url "$TORCH_INDEX" \
+                --extra-index-url https://pypi.org/simple \
+                torch torchvision; \
+            pip install --no-cache-dir transformers==5.15.0; \
+            pip install --no-cache-dir --requirement /vendor-src/pipeline/requirements-ocr.txt; \
+        else \
+            echo "KUR_AGIR=0 -> torch / transformers / easyocr ATLANDI"; \
+        fi; \
     else \
-        echo "KUR_AGIR=0 -> torch / transformers / easyocr ATLANDI" ; \
-    fi
+        echo "vendor/pipeline yok -> lokal motor bagimliliklari ATLANDI (api motoru kosar)"; \
+    fi; \
+    rm -rf /vendor-src
 
-COPY vendor/pipeline /app/pipeline
 COPY src ./src
 COPY tools ./tools
 
-RUN python tools/dependency_scanner.py /app/pipeline
+RUN if [ -f /app/pipeline/router/hat.py ]; then \
+        python tools/dependency_scanner.py /app/pipeline; \
+    else \
+        echo "hat kaynagi yok -> bagimlilik taramasi ATLANDI"; \
+    fi
 
 
+# /app/pipeline dizini ve sembolik baglar KOSULSUZ kurulur: agac yoksa baglar
+# sarkan kalir (zararsiz), yalnizca lokal motor onlari takip eder. Boylece
+# `simulate` ve `PODCAST_ENGINE=api` hicbir zaman build/run hatasi vermez;
+# `PODCAST_MODE=real` + `PODCAST_ENGINE=local` ise CALISMA ANINDA yuksek sesle
+# reddeder (bkz. src/pipeline.py:check_pipeline_path).
 RUN useradd --create-home --uid 10001 podcast \
     && mkdir -p /models/hf /models/torch \
         /data/podcast/jobs /data/podcast/out /data/podcast/kayit \

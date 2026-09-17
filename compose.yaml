@@ -9,9 +9,9 @@ services:
     # laptopta/Windows'ta run-stack.ps1 `:current` isaretini kullanir, yani
     # env dosyasi yokken davranis eskisi gibi kalir.
     image: localhost/hezarfen-podcast:${HEZARFEN_TAG:-current}
-    container_name: hezarfen-podcast-bridge
-    # AGIR servis (8 GB mem_limit, ~3,9 GB agirlik): ciplak `podman compose up`
-    # ile kalkmaz, `--profile product` ister. Unit ve deploy bu profili gecer;
+    container_name: hezarfen_text_to_podcast
+    # AGIR servis (8 GB mem_limit): ciplak `podman compose up` ile kalkmaz,
+    # `--profile product` ister. Unit ve deploy bu profili gecer;
     # deploy/run-stack.ps1 ve deploy/rollback.ps1 de gecer. Kazara bir `up`,
     # canli stack'in RAM'ini sikistirmasin diye boyle.
     profiles: ["product"]
@@ -37,28 +37,42 @@ services:
       PODCAST_STAGE_SECS: "0.2"
       PODCAST_ETA_SECS: "0"
       PODCAST_MEDIA_ROOT: /data/files
+      # `simulate` = sahte hat (yalnizca kablo provasi), `real` = gercek is.
       PODCAST_MODE: ${PODCAST_MODE:-real}
+      # `api` (VARSAYILAN) = yerli hat: PDF -> metin(+OCR) -> LLM script ->
+      # ElevenLabs -> ffmpeg mux. vendor/pipeline GEREKTIRMEZ.
+      # `local` = bugunku vendored Hat yolu (vendor/pipeline sart; yoksa
+      # calisma aninda acik hata ile reddeder).
+      PODCAST_ENGINE: ${PODCAST_ENGINE:-api}
       PODCAST_PIPELINE_PATH: ${PODCAST_PIPELINE_PATH:-/app/pipeline}
       PODCAST_OUTPUT_ROOT: /data/podcast/out
       PODCAST_LEDGER_DB: /data/podcast/kayit/router.sqlite
       PODCAST_CHAPTER_LIMIT: "1"
-      # Lokal motor varsayilan. ElevenLabs'e gecmek icin .env'de:
-      #   PODCAST_TTS_ENGINE=elevenlabs-flash-tr
-      #   SES_BULUT_IZINLI=1
-      #   ELEVENLABS_API_KEY=...
+      PODCAST_CHAPTER_CHARS: "6000"
+      PODCAST_MIN_TEXT_CHARS: "200"
+      PODCAST_OCR_LANG: ${PODCAST_OCR_LANG:-tur}
+      # Yalnizca LOKAL motorun TTS motoru (supertonic-3 = agsiz ONNX).
+      # api motoru TTS'i ELEVENLABS_* ile yapar; bu anahtarlar ona dokunmaz.
       PODCAST_TTS_ENGINE: ${PODCAST_TTS_ENGINE:-supertonic-3}
-      # Bulut TTS kapisi. Varsayilan KAPALI; acik degilse ElevenLabs motoru
-      # cagrildiginda BulutYasak firlatir, sessizce lokale DUSMEZ.
+      # Lokal motorun bulut TTS kapisi (api motoru bunu okumaz).
       SES_BULUT_IZINLI: ${SES_BULUT_IZINLI:-0}
-      # Anahtar interpolasyonla gelir; compose'a literal sir YAZILMAZ.
+      # OpenAI-uyumlu LLM ucu: filo sozlesmesi LLM_BASE_URL/LLM_MODEL/
+      # LLM_API_KEY; baska saglayiciya yalnizca env ile gecilir.
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_EXTRA_JSON: ${LLM_EXTRA_JSON:-}
+      ELEVENLABS_BASE_URL: ${ELEVENLABS_BASE_URL:-https://api.elevenlabs.io}
+      ELEVENLABS_MODEL: ${ELEVENLABS_MODEL:-eleven_flash_v2_5}
+      ELEVENLABS_LANGUAGE: ${ELEVENLABS_LANGUAGE:-tr}
+      ELEVENLABS_TIMEOUT_S: ${ELEVENLABS_TIMEOUT_S:-120}
+      # Anahtarlar interpolasyonla gelir; compose'a literal sir YAZILMAZ.
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-      # Bos ise adaptordeki hazir ses kullanilir.
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
       HF_HOME: /models/hf
       TORCH_HOME: /models/torch
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
       TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-1}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
       - hezarfen-data:/data:ro
       - podcast-jobs:/data/podcast/jobs
