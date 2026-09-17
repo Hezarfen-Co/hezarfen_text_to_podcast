@@ -272,7 +272,6 @@ jobs:
           docker build -f Containerfile -t localhost/hezarfen-podcast:$GITHUB_SHA .
 
       - name: Stage the release bundle
-        if: vars.PIPELINE_REPO != ''
         run: |
           set -euo pipefail
           mkdir -p stage
@@ -290,7 +289,6 @@ jobs:
       # Deploy isi (ve elle yeniden deploy) bunu tuketir. 30 gun, dispatch
       # kapisinin geri uzanma penceresidir.
       - name: Upload the release
-        if: vars.PIPELINE_REPO != ''
         uses: actions/upload-artifact@v4
         with:
           name: release
