@@ -63,6 +63,12 @@ on:
 # Deploy serilestirmesi workflow'da degil deploy isinde: yeni bir push, ucustaki
 # VPS degisimine dokunmadan bayat Validate/Build'i iptal edebilmeli.
 
+permissions:
+  contents: read
+  # workflow_dispatch yolu `gh run list/view` ile en yeni yesil kosuyu arar ve o
+  # kosunun artefaktini indirir; ikisi de Actions API'sidir ve YAZMA GEREKMEZ.
+  actions: read
+
 env:
   # systemd kullanici unit'i. Bkz. deploy/hezarfen_text_to_podcast_compose.service.
   SERVICE: hezarfen_text_to_podcast_compose
