@@ -1183,12 +1183,15 @@ reddeder, hiçbir şeye dokunmaz**:
 **Sağlayıcı notu (ölçüldü, bu makinede podman-compose 1.6.0):** `--env-file`
 sağlayıcıda **tek değerli**dir, yani iki `--env-file` verildiğinde yalnız
 **sonuncusu** okunur (ölçüldü: `podman compose --env-file a --env-file b config`
-→ `AI_SHARED_TOKEN` yok, çünkü `b` kazanır). Deploy bu yüzden unit'i restart
-etmeden **önce** `podman compose … config` ile modeli çözer ve çözemezse
-**hiçbir şeye dokunmadan** açık hata verir. Çözüm, iki dosyayı okuyabilen bir
-sağlayıcıdır: `podman compose version` hangisinin kullanıldığını söyler
-(docker-compose sağlayıcısı `--env-file`'ı tekrarlanabilir kabul eder). Unit'in
-`ExecStart`'ı iki dosyayı da `--env-file` ile geçer (aile sözleşmesi).
+→ `AI_SHARED_TOKEN` yok, çünkü `b` kazanır). Bu yüzden **iki dosyalı çağrı
+YASAK** ve çözüm "iki dosya okuyabilen sağlayıcı beklemek" değil, iki-kanal
+desenidir: operatör değerleri **ortamdan** gelir (unit'te
+`EnvironmentFile=`, CI'da satır satır sürece alma) ve compose'a giden **TEK**
+`--env-file` deploy sahipli `stack.env`'dir (yalnız `HEZARFEN_TAG`). Ortam
+değişkeni `--env-file` değerlerini ezer (`podman_compose.py:2562`), yani iki
+kanal çakışmaz. Deploy ayrıca unit'i restart etmeden **önce**
+`podman compose … config` ile modeli çözer ve çözemezse **hiçbir şeye
+dokunmadan** açık hata verir.
 
 Yerel/Windows yolu **değişmedi**: `deploy/OKU.md` ve `deploy/*.ps1`. Sunucunun
 elle kurulum özeti OKU.md → **"Sunucu (Linux VPS) — OTOMATIK deploy"**.
