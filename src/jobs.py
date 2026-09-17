@@ -12,7 +12,7 @@ import zlib
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config
+from . import backend, config
 
 STATE_QUEUED = "queued"
 STATE_RUNNING = "running"
@@ -47,11 +47,14 @@ REQUIRED_FIELDS = (
     "audio_id",
     "duration_secs",
     "script_id",
+    "user_id",
+    "school",
     "created_at",
     "updated_at",
 )
 
 SAFE_SOURCE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 SHUTDOWN_TIMEOUT_SECS = 10.0
 
@@ -76,6 +79,12 @@ class JobStoreFull(JobError):
         super().__init__(f"is kuyrugu dolu: {active}/{limit} is beklemede veya kosuyor")
         self.active = active
         self.limit = limit
+
+
+class JobExists(JobError):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"is zaten var: {job_id}")
+        self.job_id = job_id
 
 
 class InvalidTransition(JobError):
@@ -233,6 +242,7 @@ class JobStore:
         job_secs: float | None = None,
         retention_days: float = 0.0,
         output_root: str | os.PathLike | None = None,
+        reporter: Any | None = None,
     ) -> None:
         self.root = Path(root)
         self.workers = max(1, int(workers))
@@ -244,6 +254,8 @@ class JobStore:
         )
         self.retention_days = max(0.0, float(retention_days))
         self.output_root = Path(output_root) if output_root else None
+        self.reporter = reporter
+        self._pending: set[str] = set()
         self._runner = runner or _simulate_pipeline
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
@@ -296,6 +308,100 @@ class JobStore:
                 path.unlink()
             except OSError as exc:
                 config.log("warn", f"gecici is dosyasi silinemedi: {path.name} ({exc})")
+
+    def _report_record(self, record: dict[str, Any], retry: bool = True) -> None:
+        if self.reporter is None or not record.get("school"):
+            return
+        try:
+            self.reporter.report(record["school"], dict(record))
+        except backend.BackendRefused as exc:
+            config.log("error", f"is {record['job_id']} raporu reddedildi: {exc}")
+            if retry:
+                self._fail_from_report(record["job_id"], exc.code, retry=True)
+        except backend.BackendUnavailable as exc:
+            config.log(
+                "warn",
+                f"is {record['job_id']} raporu simdilik gonderilemedi ({exc}); "
+                "baglanti gelince tekrar denenecek",
+            )
+            with self._lock:
+                self._pending.add(record["job_id"])
+        except Exception as exc:
+            config.log("error", f"is {record['job_id']} raporu patladi: {exc}")
+            if retry:
+                self._fail_from_report(record["job_id"], "unavailable")
+
+    def _fail_from_report(self, job_id: str, code: str, retry: bool = False) -> None:
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if record is None or record["state"] in TERMINAL_STATES:
+                return
+            if not can_transition(record["state"], STATE_FAILED):
+                return
+            candidate = dict(record)
+            candidate["state"] = STATE_FAILED
+            candidate["error_code"] = code
+            candidate["stage"] = ""
+            candidate["updated_at"] = _now_ms()
+            try:
+                self._commit(record, candidate)
+            except OSError as exc:
+                config.log("error", f"is {job_id} failed olarak yazilamadi: {exc}")
+                return
+            snapshot = dict(record)
+        if retry:
+            self._report_record(snapshot, retry=False)
+
+    def flush_reports(self) -> int:
+        with self._lock:
+            pending = sorted(self._pending)
+            self._pending.clear()
+        sent = 0
+        for job_id in pending:
+            with self._lock:
+                record = self._jobs.get(job_id)
+            if record is None:
+                continue
+            self._report_record(dict(record))
+            sent += 1
+        return sent
+
+    def _upload_audio(self, record: dict[str, Any], audio_id: str) -> str | None:
+        path = self._safe_output_path(audio_id)
+        if path is None or not path.is_file():
+            config.log(
+                "error",
+                f"is {record['job_id']} sesi yuklenemez, dosya yok: {audio_id!r}",
+            )
+            return "audio_missing"
+        try:
+            self.reporter.upload(record["school"], record, path)
+        except backend.BackendRefused as exc:
+            config.log("error", f"is {record['job_id']} yuklemesi reddedildi: {exc}")
+            return exc.code
+        except backend.BackendUnavailable as exc:
+            config.log("warn", f"is {record['job_id']} yuklemesi yapilamadi: {exc}")
+            return "unavailable"
+        except Exception as exc:
+            config.log("error", f"is {record['job_id']} yuklemesi patladi: {exc}")
+            return "unavailable"
+        return None
+
+    def _report_done(self, payload: dict[str, Any]) -> str | None:
+        if self.reporter is None or not payload.get("school"):
+            return None
+        try:
+            self.reporter.report(payload["school"], payload)
+        except backend.BackendRefused as exc:
+            config.log("error", f"is {payload['job_id']} done raporu reddedildi: {exc}")
+            return exc.code
+        except backend.BackendUnavailable as exc:
+            config.log("warn", f"is {payload['job_id']} done raporu gonderilemedi: {exc}")
+            return "unavailable"
+        except Exception as exc:
+            config.log("error", f"is {payload['job_id']} done raporu patladi: {exc}")
+            return "unavailable"
+        return None
 
     def _safe_output_path(self, identifier: Any) -> Path | None:
         if self.output_root is None:
@@ -394,6 +500,7 @@ class JobStore:
                     config.log("error", f"supurme yazilamadi {job_id}: {exc}")
                 else:
                     swept += 1
+                    self._pending.add(job_id)
             self._jobs[job_id] = record
         self.purged = self._purge_expired()
         return swept
@@ -497,13 +604,23 @@ class JobStore:
         waves = max(1, math.ceil(max(pending, 1) / self.workers))
         return int(math.ceil(self.job_secs * waves))
 
-    def submit(self, source_id: str, job_format: str) -> tuple[dict[str, Any], int]:
+    def submit(
+        self,
+        job_id: str,
+        source_id: str,
+        job_format: str,
+        user_id: str = "",
+        school: str = "",
+    ) -> tuple[dict[str, Any], int]:
+        if not isinstance(job_id, str) or SAFE_JOB_ID.match(job_id) is None:
+            raise ValueError(f"gecersiz job_id: {job_id!r}")
         now = _now_ms()
         with self._lock:
+            if job_id in self._jobs:
+                raise JobExists(job_id)
             active = self._active_count()
             if active >= self.max_jobs:
                 raise JobStoreFull(active, self.max_jobs)
-            job_id = new_job_id()
             record = {
                 "job_id": job_id,
                 "source_id": source_id,
@@ -518,6 +635,8 @@ class JobStore:
                 "script_id": None,
                 "audio_ids": [],
                 "script_ids": [],
+                "user_id": str(user_id),
+                "school": str(school),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -526,6 +645,7 @@ class JobStore:
             eta = self.estimate_eta(active + 1)
             snapshot = dict(record)
         config.log("info", f"is {job_id} kuyruga alindi (format={job_format} eta={eta}s)")
+        self._report_record(snapshot)
         self._dispatch(job_id)
         return snapshot, eta
 
@@ -537,6 +657,11 @@ class JobStore:
             return dict(record)
 
     def transition(self, job_id: str, target: str, **fields: Any) -> dict[str, Any]:
+        return self._transition(job_id, target, report=True, **fields)
+
+    def _transition(
+        self, job_id: str, target: str, report: bool = True, **fields: Any
+    ) -> dict[str, Any]:
         with self._lock:
             record = self._jobs.get(job_id)
             if record is None:
@@ -549,7 +674,10 @@ class JobStore:
             candidate.update(fields)
             candidate["updated_at"] = _now_ms()
             self._commit(record, candidate)
-            return dict(record)
+            snapshot = dict(record)
+        if report:
+            self._report_record(snapshot)
+        return snapshot
 
     def update_progress(
         self, job_id: str, stage: str, progress: float
@@ -564,8 +692,12 @@ class JobStore:
             candidate["stage"] = stage
             candidate["progress"] = round(min(max(float(progress), 0.0), 1.0), 4)
             candidate["updated_at"] = _now_ms()
+            stage_changed = candidate["stage"] != record["stage"]
             self._commit(record, candidate)
-            return dict(record)
+            snapshot = dict(record)
+        if stage_changed:
+            self._report_record(snapshot)
+        return snapshot
 
     def begin(self, job_id: str) -> bool:
         with self._lock:
@@ -627,12 +759,43 @@ class JobStore:
             record = self._jobs.get(job_id)
             if record is None:
                 raise JobNotFound(job_id)
+            if record["state"] != STATE_RUNNING:
+                config.log(
+                    "warn",
+                    f"is {job_id} bitirilemez: durum artik '{record['state']}' "
+                    "(rapor reddi isi dusurmus olabilir)",
+                )
+                return dict(record)
             if record["cancel_requested"]:
                 config.log("info", f"is {job_id} bitiste iptal bayragini gordu")
                 return self.transition(job_id, STATE_CANCELLED)
-            return self.transition(
+            needs_upload = self.reporter is not None and bool(record.get("school"))
+            snapshot = dict(record)
+        if needs_upload:
+            snapshot["duration_secs"] = float(duration_secs)
+            code = self._upload_audio(snapshot, audio_id)
+            if code is None:
+                done = dict(snapshot)
+                done.update(
+                    state=STATE_DONE,
+                    stage="done",
+                    progress=1.0,
+                    error_code=None,
+                    audio_id=audio_id,
+                    duration_secs=float(duration_secs),
+                    script_id=script_id,
+                    audio_ids=_id_list(audio_ids, audio_id),
+                    script_ids=_id_list(script_ids, script_id),
+                )
+                code = self._report_done(done)
+            if code is not None:
+                self._fail_from_report(job_id, code, retry=True)
+                with self._lock:
+                    return dict(self._jobs.get(job_id) or snapshot)
+            return self._transition(
                 job_id,
                 STATE_DONE,
+                report=False,
                 stage="done",
                 progress=1.0,
                 error_code=None,
@@ -642,3 +805,21 @@ class JobStore:
                 audio_ids=_id_list(audio_ids, audio_id),
                 script_ids=_id_list(script_ids, script_id),
             )
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise JobNotFound(job_id)
+            if record["cancel_requested"]:
+                return self.transition(job_id, STATE_CANCELLED)
+        return self.transition(
+            job_id,
+            STATE_DONE,
+            stage="done",
+            progress=1.0,
+            error_code=None,
+            audio_id=audio_id,
+            duration_secs=float(duration_secs),
+            script_id=script_id,
+            audio_ids=_id_list(audio_ids, audio_id),
+            script_ids=_id_list(script_ids, script_id),
+        )

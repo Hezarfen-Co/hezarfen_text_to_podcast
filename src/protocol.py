@@ -8,6 +8,7 @@ from typing import Any
 
 PROTOCOL = "hab/2"
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+PODCAST_REPORT_CAPABILITY = "podcast.report"
 KEEPALIVE_SECS = 10
 IDLE_TIMEOUT_SECS = 30.0
 GREETING_TIMEOUT_SECS = 8.0
@@ -205,6 +206,78 @@ def build_api_request(
     if on_behalf_of:
         request["on_behalf_of"] = on_behalf_of
     return request
+
+
+def build_capability_call(
+    request_id: str, school: str, capability: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    if not isinstance(school, str) or not school.strip():
+        raise CapabilityError("malformed", "okul slug'i zorunlu; varsayilan yok")
+    if not isinstance(capability, str) or not capability.strip():
+        raise CapabilityError("malformed", "yetenek adi zorunlu")
+    return {
+        "id": request_id,
+        "school": school,
+        "capability": capability,
+        "payload": payload,
+    }
+
+
+def parse_capability_response(frame: Any, request_id: str) -> dict[str, Any]:
+    if not isinstance(frame, dict):
+        raise CapabilityError("malformed", "yetenek cevabi bir nesne degil")
+    status_field = frame.get("status")
+    if status_field == "ok":
+        payload = frame.get("payload")
+        if not isinstance(payload, dict):
+            raise CapabilityError("malformed", "yetenek cevabinda 'payload' nesne degil")
+        return payload
+    if status_field == "err":
+        raise CapabilityError(
+            str(frame.get("code", "?")), str(frame.get("message", ""))
+        )
+    raise CapabilityError("malformed", f"bilinmeyen cevap durumu: {status_field!r}")
+
+
+def build_upload_request(
+    request_id: str,
+    school: str,
+    job_id: str,
+    name: str,
+    content_type: str,
+    size: int,
+    duration_secs: float | None = None,
+) -> dict[str, Any]:
+    if not isinstance(school, str) or not school.strip():
+        raise CapabilityError("malformed", "okul slug'i zorunlu; varsayilan yok")
+    request: dict[str, Any] = {
+        "id": request_id,
+        "upload": True,
+        "school": school,
+        "job_id": job_id,
+        "name": name,
+        "content_type": content_type,
+        "size": int(size),
+    }
+    if duration_secs is not None:
+        request["duration_secs"] = float(duration_secs)
+    return request
+
+
+def parse_upload_response(frame: Any) -> dict[str, Any]:
+    if not isinstance(frame, dict):
+        raise CapabilityError("malformed", "yukleme cevabi bir nesne degil")
+    status_field = frame.get("status")
+    if status_field == "ok":
+        key = frame.get("key")
+        if not isinstance(key, str) or not key:
+            raise CapabilityError("malformed", "yukleme cevabinda 'key' yok")
+        return frame
+    if status_field == "err":
+        raise CapabilityError(
+            str(frame.get("code", "?")), str(frame.get("message", ""))
+        )
+    raise CapabilityError("malformed", f"bilinmeyen yukleme durumu: {status_field!r}")
 
 
 def _coerce_status(value: Any) -> int:

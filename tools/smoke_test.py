@@ -7,6 +7,7 @@ import time
 
 DEFAULT_PIPELINE = r"C:\PROJECTS\podcast"
 SMOKE_SCHOOL = "yerel-denetim"
+SMOKE_USER = "yerel-denetci"
 DEFAULT_MEDIA = r"C:\PROJECTS\podcast\samples"
 DEFAULT_SOURCE = "kisa_slayt.pdf"
 
@@ -69,10 +70,13 @@ def main() -> int:
     store.start()
     capabilities.configure(store, bool(probe["llm_ready"]))
 
+    job_id = jobs.new_job_id()
     submitted = capabilities.dispatch(
-        "podcast.submit", SMOKE_SCHOOL, {"source_id": args.source, "format": args.format}
+        "podcast.submit",
+        SMOKE_SCHOOL,
+        {"job_id": job_id, "source_id": args.source, "user_id": SMOKE_USER,
+         "format": args.format},
     )
-    job_id = submitted["job_id"]
     print(f"[smoke] is verildi: {job_id} eta={submitted['eta_secs']}s", flush=True)
 
     terminal = (jobs.STATE_DONE, jobs.STATE_FAILED, jobs.STATE_CANCELLED)
@@ -103,9 +107,13 @@ def main() -> int:
     record = store.get(job_id)
     print(f"[smoke] durum={record['state']} hata={record['error_code']}", flush=True)
     if record["state"] == jobs.STATE_DONE:
-        payload = capabilities.dispatch("podcast.result", SMOKE_SCHOOL, {"job_id": job_id})
+        print(
+            "[smoke] backend satiri icin: school=%s job_id=%s user_id=%s"
+            % (SMOKE_SCHOOL, job_id, SMOKE_USER),
+            flush=True,
+        )
         for key in ("audio_id", "script_id", "duration_secs", "audio_ids", "script_ids"):
-            print(f"[smoke] {key} = {payload.get(key)}", flush=True)
+            print(f"[smoke] {key} = {record.get(key)}", flush=True)
         return 0
     return 1
 

@@ -18,7 +18,7 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ConnectionTerminated, QuicEvent, StreamDataReceived
 
-from . import api_engine, capabilities, config, jobs, pipeline, protocol
+from . import api_engine, backend, capabilities, config, jobs, pipeline, protocol
 from .protocol import CapabilityError
 
 CERT_FETCH_TIMEOUT_SECS = 10
@@ -68,6 +68,7 @@ class BridgeProtocol(QuicConnectionProtocol):
             stream.read_frame(), timeout=protocol.GREETING_TIMEOUT_SECS
         )
         worker_id = protocol.parse_greeting(greeting)
+        backend.set_client(asyncio.get_running_loop(), self)
         jobs.write_status(self._settings.job_root, True, worker_id)
         config.log(
             "info",
@@ -101,6 +102,52 @@ class BridgeProtocol(QuicConnectionProtocol):
             f"kim={on_behalf_of or 'servis(ai rolu)'}",
         )
         return response
+
+    async def call_capability(
+        self, school: str, capability: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        sid = self._quic.get_next_available_stream_id()
+        stream = protocol.FrameStream()
+        self._streams[sid] = stream
+        request_id = jobs.new_job_id()
+        request = protocol.build_capability_call(request_id, school, capability, payload)
+        try:
+            self._send_frame(sid, request, end=True)
+            frame = await stream.read_frame()
+        finally:
+            self._streams.pop(sid, None)
+        return protocol.parse_capability_response(frame, request_id)
+
+    async def upload_blob(
+        self,
+        school: str,
+        job_id: str,
+        name: str,
+        content_type: str,
+        data: bytes,
+        duration_secs: float | None = None,
+    ) -> dict[str, Any]:
+        sid = self._quic.get_next_available_stream_id()
+        stream = protocol.FrameStream()
+        self._streams[sid] = stream
+        request_id = jobs.new_job_id()
+        header = protocol.build_upload_request(
+            request_id, school, job_id, name, content_type, len(data), duration_secs
+        )
+        try:
+            self._send_frame(sid, header, end=False)
+            self._quic.send_stream_data(sid, data, end_stream=True)
+            self.transmit()
+            frame = await stream.read_frame()
+        finally:
+            self._streams.pop(sid, None)
+        answer = protocol.parse_upload_response(frame)
+        config.log(
+            "debug",
+            f"yukleme {job_id} -> {answer.get('key', '?')} "
+            f"({answer.get('size', '?')} bayt)",
+        )
+        return answer
 
     def _send_frame(self, sid: int, obj: Any, end: bool) -> None:
         self._quic.send_stream_data(sid, protocol.encode_frame(obj), end_stream=end)
@@ -276,6 +323,7 @@ async def run_once(settings: config.Config) -> None:
             await connection.wait_closed()
         finally:
             keepalive_task.cancel()
+            backend.clear_client()
     config.log("info", "baglanti kapandi")
 
 
@@ -334,6 +382,7 @@ def build_store(
             job_secs=job_secs,
             retention_days=settings.retention_days,
             output_root=settings.output_root,
+            reporter=backend,
         )
     except OSError as exc:
         config.log("error", f"PODCAST_JOB_ROOT kullanilamiyor ({settings.job_root}): {exc}")

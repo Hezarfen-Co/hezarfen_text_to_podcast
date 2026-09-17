@@ -46,7 +46,7 @@ class TmpResidueRegression(unittest.TestCase):
     def test_the_temp_file_name_must_contain_the_pid(self) -> None:
         store = self.make_store()
         with TempFileRecorder() as recorder:
-            store.submit("kaynak", "duz_okuma")
+            store.submit("9d3f0001-0000-4000-8000-000000000001", "kaynak", "duz_okuma")
             jobs.write_status(self.root, True, "w1")
         self.assertTrue(recorder.sources, "atomik yazma os.replace kullanmiyor")
         for name in recorder.sources:
@@ -60,7 +60,9 @@ class TmpResidueRegression(unittest.TestCase):
     def test_atomic_writing_must_be_done_with_a_temp_file_plus_replace(self) -> None:
         store = self.make_store()
         with TempFileRecorder() as recorder:
-            job_id = store.submit("kaynak", "duz_okuma")[0]["job_id"]
+            job_id = store.submit(
+                "9d3f0001-0000-4000-8000-000000000002", "kaynak", "duz_okuma"
+            )[0]["job_id"]
         self.assertIn(
             f"{job_id}.json.tmp{os.getpid()}",
             "".join(recorder.sources),
@@ -71,7 +73,7 @@ class TmpResidueRegression(unittest.TestCase):
 
     def test_no_residue_must_remain_after_a_normal_write(self) -> None:
         store = self.make_store()
-        store.submit("kaynak", "duz_okuma")
+        store.submit("9d3f0001-0000-4000-8000-000000000003", "kaynak", "duz_okuma")
         jobs.write_status(self.root, True, "w1")
         residues = [name for name in os.listdir(self.root) if ".tmp" in name]
         self.assertEqual(residues, [], f"atomik yazmadan gecici dosya kaldi: {residues}")
@@ -94,7 +96,9 @@ class TmpResidueRegression(unittest.TestCase):
 
     def test_the_cleanup_must_not_delete_real_job_records(self) -> None:
         seed = self.make_store()
-        job_id = seed.submit("saglam", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "9d3f0001-0000-4000-8000-000000000004", "saglam", "duz_okuma"
+        )[0]["job_id"]
         jobs.write_status(self.root, True, "w1")
         (self.root / "01ESKIISKAYDI000000000000.json.tmp999-dead").write_text("{}", encoding="ascii")
 
@@ -138,7 +142,9 @@ class TmpResidueRegression(unittest.TestCase):
 
     def test_a_half_written_temp_file_must_not_be_loaded_as_a_record(self) -> None:
         seed = self.make_store()
-        job_id = seed.submit("saglam", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "9d3f0001-0000-4000-8000-000000000005", "saglam", "duz_okuma"
+        )[0]["job_id"]
         (self.root / f"{job_id}.json.tmp999-dead").write_text(
             json.dumps({"job_id": job_id, "state": "done"}), encoding="ascii"
         )

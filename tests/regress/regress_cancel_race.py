@@ -22,8 +22,8 @@ class CancelRaceRegression(unittest.TestCase):
         self._tmp.cleanup()
         config._active_level = self._log_level
 
-    def running_job(self) -> str:
-        job_id = self.store.submit("kaynak-yaris", "duz_okuma")[0]["job_id"]
+    def running_job(self, job_id: str) -> str:
+        self.store.submit(job_id, "kaynak-yaris", "duz_okuma")
         self.store.transition(job_id, jobs.STATE_RUNNING)
         return job_id
 
@@ -32,7 +32,7 @@ class CancelRaceRegression(unittest.TestCase):
             return json.load(handle)
 
     def test_finish_returns_cancelled_not_done_when_cancel_flag_set(self) -> None:
-        job_id = self.running_job()
+        job_id = self.running_job("b1f0c9d8-1111-4a01-9001-000000000001")
         self.assertTrue(self.store.cancel(job_id))
         finished = self.store.finish(
             job_id, audio_id="a1", duration_secs=12.0, script_id="s1"
@@ -44,7 +44,7 @@ class CancelRaceRegression(unittest.TestCase):
         )
 
     def test_finish_must_not_write_audio_id_when_cancel_flag_set(self) -> None:
-        job_id = self.running_job()
+        job_id = self.running_job("b1f0c9d8-1111-4a01-9001-000000000002")
         self.store.cancel(job_id)
         finished = self.store.finish(
             job_id, audio_id="a1", duration_secs=12.0, script_id="s1"
@@ -58,7 +58,7 @@ class CancelRaceRegression(unittest.TestCase):
         self.assertEqual(finished["script_ids"], [])
 
     def test_in_memory_and_on_disk_result_must_be_identical(self) -> None:
-        job_id = self.running_job()
+        job_id = self.running_job("b1f0c9d8-1111-4a01-9001-000000000003")
         self.store.cancel(job_id)
         self.store.finish(job_id, audio_id="a1", duration_secs=12.0, script_id="s1")
         memory = self.store.get(job_id)
@@ -72,7 +72,7 @@ class CancelRaceRegression(unittest.TestCase):
         self.assertIsNone(disk["audio_id"], "iptal edilen isin audio_id'si diske yazildi")
 
     def test_job_that_was_not_cancelled_must_become_done_normally(self) -> None:
-        job_id = self.running_job()
+        job_id = self.running_job("b1f0c9d8-1111-4a01-9001-000000000004")
         finished = self.store.finish(
             job_id, audio_id="a1", duration_secs=12.0, script_id="s1"
         )
@@ -83,7 +83,9 @@ class CancelRaceRegression(unittest.TestCase):
     def test_result_must_stay_consistent_when_cancel_and_finish_run_concurrently(self) -> None:
         for round_index in range(20):
             with self.subTest(round_index=round_index):
-                job_id = self.running_job()
+                job_id = self.running_job(
+                    f"b1f0c9d8-1111-4a01-9001-{round_index:012x}"
+                )
                 barrier = threading.Barrier(2)
                 output: dict = {}
 
@@ -121,7 +123,7 @@ class CancelRaceRegression(unittest.TestCase):
                     self.assertEqual(disk["audio_id"], "a1")
 
     def test_finish_must_hold_the_same_lock_while_a_running_job_is_cancelled(self) -> None:
-        job_id = self.running_job()
+        job_id = self.running_job("b1f0c9d8-1111-4a01-9001-000000000005")
         self.store.cancel(job_id)
         self.assertTrue(
             self.store.cancel_requested(job_id),

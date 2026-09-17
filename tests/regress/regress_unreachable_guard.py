@@ -78,7 +78,9 @@ class CancelFlagOnQueuedIsUnreachable(unittest.TestCase):
         )
 
     def test_cancelling_a_queued_job_leaves_it_cancelled_not_queued(self) -> None:
-        record, _ = self.store.submit("01SOURCE", "duz_okuma")
+        record, _ = self.store.submit(
+            "3c4a0001-0000-4000-8000-000000000001", "01SOURCE", "duz_okuma"
+        )
         job_id = record["job_id"]
         self.assertTrue(self.store.cancel(job_id))
         after = self.store.get(job_id)
@@ -86,7 +88,9 @@ class CancelFlagOnQueuedIsUnreachable(unittest.TestCase):
         self.assertTrue(after["cancel_requested"])
 
     def test_shutdown_only_flags_running_jobs(self) -> None:
-        queued, _ = self.store.submit("01SOURCE", "duz_okuma")
+        queued, _ = self.store.submit(
+            "3c4a0001-0000-4000-8000-000000000002", "01SOURCE", "duz_okuma"
+        )
         self.store.shutdown(timeout=1.0)
         after = self.store.get(queued["job_id"])
         self.assertEqual(after["state"], jobs.STATE_QUEUED)
@@ -103,14 +107,16 @@ class CancelFlagOnQueuedIsUnreachable(unittest.TestCase):
     }
 
     def test_no_public_sequence_produces_a_queued_job_with_the_flag(self) -> None:
-        for step, expected_state in self.STEPS.items():
+        for index, (step, expected_state) in enumerate(self.STEPS.items()):
             with self.subTest(step=step):
                 store = jobs.JobStore(
                     root=Path(self._tmp.name) / step, workers=1,
                     max_jobs=64, stage_secs=0.0,
                 )
                 try:
-                    record, _ = store.submit("01SOURCE", "duz_okuma")
+                    record, _ = store.submit(
+                        f"3c4a0002-0000-4000-8000-{index:012x}", "01SOURCE", "duz_okuma"
+                    )
                     job_id = record["job_id"]
                     if step == "begin":
                         store.begin(job_id)

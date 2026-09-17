@@ -25,7 +25,7 @@ INPUTS = (
 MODEL = {
     "Q": {
         "begin": ("True", "R"),
-        "finish": ("InvalidTransition", "Q"),
+        "finish": ("queued", "Q"),
         "fail": ("failed", "F"),
         "cancel": ("True", "C"),
         "progress": ("None", "Q"),
@@ -52,7 +52,7 @@ MODEL = {
     },
     "D": {
         "begin": ("False", "D"),
-        "finish": ("InvalidTransition", "D"),
+        "finish": ("done", "D"),
         "fail": ("InvalidTransition", "D"),
         "cancel": ("False", "D"),
         "progress": ("None", "D"),
@@ -61,7 +61,7 @@ MODEL = {
     },
     "F": {
         "begin": ("False", "F"),
-        "finish": ("InvalidTransition", "F"),
+        "finish": ("failed", "F"),
         "fail": ("InvalidTransition", "F"),
         "cancel": ("False", "F"),
         "progress": ("None", "F"),
@@ -70,7 +70,7 @@ MODEL = {
     },
     "FC": {
         "begin": ("False", "FC"),
-        "finish": ("InvalidTransition", "FC"),
+        "finish": ("failed", "FC"),
         "fail": ("InvalidTransition", "FC"),
         "cancel": ("False", "FC"),
         "progress": ("None", "FC"),
@@ -79,7 +79,7 @@ MODEL = {
     },
     "C": {
         "begin": ("False", "C"),
-        "finish": ("InvalidTransition", "C"),
+        "finish": ("cancelled", "C"),
         "fail": ("InvalidTransition", "C"),
         "cancel": ("False", "C"),
         "progress": ("None", "C"),
@@ -171,9 +171,12 @@ class Adapter:
     def __init__(self, store: jobs.JobStore) -> None:
         self.store = store
         self.job_id = ""
+        self.counter = 0
 
     def reset(self) -> None:
-        record, _ = self.store.submit("01SOURCE", "duz_okuma")
+        self.counter += 1
+        job_id = "01MODEL%04d" % self.counter
+        record, _ = self.store.submit(job_id, "01SOURCE", "duz_okuma", user_id="ogretmen-1")
         self.job_id = record["job_id"]
 
     def send(self, symbol: str) -> str:

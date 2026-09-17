@@ -63,8 +63,13 @@ podcast üretimi ise **~45 dakika** sürer. Bu iki sayı aynı çağrının içi
 
 Bu yüzden mimari ikiye bölünmüştür:
 
-- `podcast.submit` / `status` / `result` / `cancel` **yalnızca iş deposuna
-  dokunur ve anında döner.** Hiçbiri uzun işi beklemez.
+- `podcast.submit` / `podcast.cancel` **yalnızca yerel çalışma önbelleğine
+  dokunur ve anında döner.** Hiçbiri uzun işi beklemez. İşin `status`/`result`
+  cevapları artık **backend'in kendi satırından** gelir: kimliği backend üretir,
+  servis her geçişi `podcast.report` ile geri bildirir ve biten mp3'ü
+  `BlobUploadRequest` ile yükler. `done` raporu, ses yüklenmeden
+  `audio_missing` ile reddedilir — yani "bitti" demek ile "ses hazır" demek
+  aynı şeydir.
 - Uzun iş **ayrı, `daemon=True` işaretli işçi thread'lerinde** koşar; işler
   `queue.Queue` üzerinden dağıtılır. asyncio'nun varsayılan executor'ı bilerek
   kullanılmaz: dakikalarca süren bir iş o havuzu tıkar ve milisaniyelik `status`
@@ -94,16 +99,22 @@ sayısıdır (aşılırsa yine `busy`, ama `podcast.submit` içinden).
 
 | Yetenek | İstek payload'u | Başarılı cevap | Hatalar |
 | --- | --- | --- | --- |
-| `podcast.submit` | `source_id` (zorunlu metin), `format` (ops.) | `{"job_id":...,"state":"queued","eta_secs":<int>}` | `bad_request`, `busy`, `llm_unavailable` |
-| `podcast.status` | `job_id` (zorunlu metin) | `{"job_id":...,"state":...,"stage":<metin>,"progress":<0.0-1.0>,"error_code":<metin\|null>}` | `bad_request`, `not_found` |
-| `podcast.result` | `job_id` (zorunlu metin) | `{"job_id":...,"audio_id":...,"duration_secs":<float>,"script_id":...,"format":...}` | `bad_request`, `not_found`, `not_ready` |
-| `podcast.cancel` | `job_id` (zorunlu metin) | `{"job_id":...,"cancelled":<bool>}` | `bad_request`, `not_found` |
+| `podcast.submit` (backend → servis) | `job_id` (**backend'in ürettiği**, zorunlu), `source_id` (zorunlu), `user_id` (zorunlu), `format` (ops.) | `{"job_id":...,"state":"queued","eta_secs":<int>}` | `bad_request`, `conflict`, `busy`, `llm_unavailable` |
+| `podcast.cancel` (backend → servis) | `job_id` (zorunlu metin) | `{"job_id":...,"cancelled":<bool>}` | `bad_request`, `not_found` |
+| `podcast.report` (servis → backend) | `job_id`, `source_id`, `format`, `user_id`, `state`, `stage`, `progress`, `error_code` | `{"job_id":...,"stored":true}` | `unknown_job`, `not_permitted`, `invalid_payload`, `audio_missing`, `expired`, `unavailable` |
+| blob yükleme (servis → backend) | `{id, upload:true, school, job_id, name, content_type, size, duration_secs}` + tam `size` bayt | `{"status":"ok","key":"podcast/<job>.mp3","size":<int>}` | `unknown_job`, `expired`, `malformed` |
+
+`podcast.report` **sıralı** gönderilir: her geçişin cevabı beklenir, sonra
+sonraki gider. Reddedilen bir rapor (ya da yükleme) işi yerelde `failed` yapar ve
+**reddin kodu** `error_code` olarak yazılır; sessizce yutulmaz. Bağlantı yokken
+raporlar beklemeye alınır ve bağlantı gelince sırayla gönderilir — bu durumda iş
+asla `done` görünmez, `queued`/`running` kalır.
 
 Payload tipleri katı doğrulanır; uymayan istek `bad_request` alır.
 
-`podcast.result` işi bitmemişse `not_ready` döner — `not_found` **değil**;
-"böyle bir iş yok" ile "iş var ama henüz hazır değil" çağıran için farklı
-şeylerdir ve ikincisi tekrar denemeye değer.
+`podcast.status` ve `podcast.result` **artık servis yeteneği değildir**; bu iki
+cevabı backend kendi satırından verir. Servis onları ne bildirir ne işler
+(bildiren eski bir dağıtım `unsupported_capability` alır).
 
 `podcast.cancel`'ın `cancelled` alanı **"bu çağrı bir şeyi iptal etti mi"**
 sorusunun cevabıdır: kuyruktaki ya da koşan bir iş için `true`, zaten
@@ -173,9 +184,10 @@ geçilir (platform farkı, hata değil).
 Açılışta kayıtlar **şema doğrulamasından** geçer: zorunlu alanlardan (`job_id`,
 `source_id`, `format`, `state`, `stage`, `progress`, `error_code`,
 `cancel_requested`, `audio_id`, `duration_secs`, `script_id`, `created_at`,
-`updated_at`) biri eksikse kayıt uyarı ile atlanır. Aksi halde geçerli JSON ama
-eksik alanlı bir dosya yüklenir, `podcast.status` `KeyError` atar ve köprü o iş
-için sonsuza kadar `internal` döner.
+`updated_at`, `user_id`, `school`) biri eksikse kayıt uyarı ile atlanır. Yerel
+depo artık caller'a görünen tek kaynak DEĞİLDİR: bozuk bir kayıt yalnızca bu
+makinedeki teşhis bilgisini kaybettirir, çağıranın gördüğü satır backend'de
+durur ve yeni bir submit onu yeniden açar.
 
 Dosya adı ile içerideki `job_id` uyuşmayan kayıtlar açılışta atlanır; `job_id`
 hiçbir zaman kullanıcı girdisinden dosya yoluna çevrilmez (arama bellekteki
@@ -309,7 +321,8 @@ gelmiştir (`--kes <adim>` resume sınaması) ve yeniden fırlatılır → `fail
 
 ### Çıktı eşlemesi
 
-`HatSonucu` → `podcast.result`:
+`HatSonucu` → yerel kayıt (çağıranın gördüğü cevap backend satırıdır; ses
+`BlobUploadRequest` ile yüklenir):
 
 | cevap alanı | kaynak |
 | --- | --- |
@@ -1171,15 +1184,11 @@ elle kurulum özeti OKU.md → **"Sunucu (Linux VPS) — OTOMATIK deploy"**.
 
 ## BİLİNEN EKSİKLER / SONRAKİ ADIM
 
-- **Üretilen MP3 backend'e ULAŞMIYOR — teslim yolu tanımsız.** `podcast-out`
-  özel bir hacimdir; backend onu bağlamıyor (yalnızca `hezarfen-data`).
-  `podcast.result`'ın döndürdüğü `audio_id`, `PODCAST_OUTPUT_ROOT`'a göre
-  relatif bir yoldur ve backend'in çözebileceği bir kökü yoktur. Ürünün ana
-  çıktısının teslim mekanizması **henüz kararlaştırılmadı**; iki seçenek var:
-  (a) MP3'ü `hezarfen-data`'nın `files/` altına ULID adıyla yazmak ve backend'in
-  mevcut blob rotasını kullanmak — bu `hezarfen-data`'yı `:ro` yerine `rw`
-  bağlamayı gerektirir, (b) backend'e `podcast-out`'u `:ro` bağlayıp yeni bir
-  servis rotası eklemek. Karar backend tarafıyla birlikte verilmeli.
+- ~~Üretilen MP3 backend'e ULAŞMIYOR~~ — **KAPANDI (2026-09-17).** Teslim yolu
+  artık `BlobUploadRequest`: biten mp3 `done` raporundan ÖNCE ham bayt olarak
+  yüklenir, backend onu okulun kendi blob köküne yazar ve `audio_key` +
+  `duration_secs` alanlarını satıra damgalar. Servisin kendi `podcast-out`
+  hacmi yalnızca yerel çalışma kopyasıdır; `hezarfen-data` hâlâ `:ro` bağlanır.
 
 - ~~Cok bolumlu hizalama sinanmadi~~ - **KAPANDI (2026-09-07).** Eldeki
   orneklerin hicbiri birden fazla bolum uretmiyordu; bunun icin hat deposuna

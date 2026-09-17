@@ -35,6 +35,17 @@ def _guard(label: str, call, *args) -> list[str]:
 
 VALIDATE_SCHOOL = "denetim-okulu"
 
+ID_ONE = "11111111-1111-7111-8111-111111111111"
+ID_TWO = "22222222-2222-7222-8222-222222222222"
+ID_THREE = "33333333-3333-7333-8333-333333333333"
+ID_FOUR = "44444444-4444-7444-8444-444444444444"
+ID_FIVE = "55555555-5555-7555-8555-555555555555"
+ID_SIX = "66666666-6666-7666-8666-666666666666"
+ID_SEVEN = "77777777-7777-7777-8777-777777777777"
+ID_EIGHT = "88888888-8888-7888-8888-888888888888"
+ID_NINE = "99999999-9999-7999-8999-999999999999"
+ID_TEN = "10101010-1010-7010-8010-101010101010"
+
 
 def _dispatch(capability: str, payload: dict) -> dict:
     from . import capabilities
@@ -53,7 +64,7 @@ def _await_state(store, job_id: str, wanted: tuple[str, ...], deadline_secs: flo
 
 
 def _check_registry(root: str) -> list[str]:
-    from . import capabilities, jobs
+    from . import capabilities, jobs, protocol
 
     problems: list[str] = []
     locked = ("tek_ogretici", "ogrenci_hoca", "duz_okuma")
@@ -73,10 +84,17 @@ def _check_registry(root: str) -> list[str]:
     if problems:
         return problems
 
-    expected = {"podcast.submit", "podcast.status", "podcast.result", "podcast.cancel"}
+    expected = {"podcast.submit", "podcast.cancel"}
     found = set(capabilities.names())
     if found != expected:
         problems.append(f"yetenek kumesi beklenenden farkli: {sorted(found)}")
+    for removed in ("podcast.status", "podcast.result"):
+        if removed in found:
+            problems.append(
+                f"{removed} hala bildiriliyor; is durumu artik backend'in satirinda"
+            )
+    if capabilities.REPORT_CAPABILITY != protocol.PODCAST_REPORT_CAPABILITY:
+        problems.append("rapor yetenek adi protocol sabitiyle uyusmuyor")
     for name, handler in capabilities.REGISTRY.items():
         if not callable(handler):
             problems.append(f"{name} icin isleyici cagrilabilir degil")
@@ -84,74 +102,39 @@ def _check_registry(root: str) -> list[str]:
     store = jobs.JobStore(root=os.path.join(root, "registry"), workers=1, max_jobs=8, stage_secs=0.0)
     capabilities.configure(store, llm_ready=False)
 
-    submitted = _dispatch("podcast.submit", {"source_id": "ornek"})
-    job_id = str(submitted.get("job_id", ""))
-    if submitted.get("state") != "queued" or len(job_id) != 26:
+    submitted = _dispatch(
+        "podcast.submit",
+        {"job_id": ID_ONE, "source_id": "ornek", "user_id": "kullanici-1"},
+    )
+    if submitted.get("job_id") != ID_ONE or submitted.get("state") != "queued":
         problems.append(f"anahtarsiz duz_okuma submit'i kabul edilmedi: {submitted}")
     if not isinstance(submitted.get("eta_secs"), int) or submitted["eta_secs"] < 1:
         problems.append(f"eta_secs bir pozitif tamsayi degil: {submitted.get('eta_secs')}")
 
-    reported = _dispatch("podcast.status", {"job_id": job_id})
-    if reported.get("state") != "queued" or reported.get("progress") != 0.0:
-        problems.append(f"podcast.status kuyruktaki isi dogru bildirmedi: {reported}")
-    if "error_code" not in reported or reported["error_code"] is not None:
-        problems.append("podcast.status error_code alanini null olarak dondurmedi")
+    record = store.get(ID_ONE)
+    if record.get("user_id") != "kullanici-1":
+        problems.append(f"kayit kullaniciyi tasimiyor: {record.get('user_id')}")
+    if record.get("school") != VALIDATE_SCHOOL:
+        problems.append(f"kayit okulu tasimiyor: {record.get('school')}")
 
     _expect_error(
         problems,
-        "bitmemis is icin podcast.result",
-        "not_ready",
-        _dispatch,
-        "podcast.result",
-        {"job_id": job_id},
-    )
-
-    if _dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not True:
-        problems.append("kuyruktaki is iptal edilemedi")
-    if _dispatch("podcast.status", {"job_id": job_id}).get("state") != "cancelled":
-        problems.append("iptal sonrasi durum 'cancelled' olmadi")
-    if _dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not False:
-        problems.append("bitmis is icin ikinci iptal True dondu")
-
-    _expect_error(
-        problems,
-        "anahtarsiz tek_ogretici submit'i",
-        "llm_unavailable",
+        "ayni is kimligiyla ikinci submit",
+        "conflict",
         _dispatch,
         "podcast.submit",
-        {"source_id": "ornek", "format": "tek_ogretici"},
+        {"job_id": ID_ONE, "source_id": "ornek", "user_id": "kullanici-1"},
     )
-    _expect_error(
-        problems,
-        "anahtarsiz ogrenci_hoca submit'i",
-        "llm_unavailable",
-        _dispatch,
-        "podcast.submit",
-        {"source_id": "ornek", "format": "ogrenci_hoca"},
-    )
-
-    from .protocol import CapabilityError
-
-    try:
-        _dispatch("podcast.submit", {"source_id": "ornek", "format": "tek_ogretici"})
-    except CapabilityError as exc:
-        if "duz_okuma" not in str(exc):
-            problems.append("llm_unavailable mesaji kullanilabilir formatlari soylemiyor")
-
-    for capability in ("podcast.status", "podcast.result", "podcast.cancel"):
-        _expect_error(
-            problems,
-            f"{capability} bilinmeyen is icin",
-            "not_found",
-            _dispatch,
-            capability,
-            {"job_id": "YOKBOYLEBIRIS"},
-        )
 
     for capability, payload in (
         ("podcast.submit", {}),
-        ("podcast.submit", {"source_id": "ornek", "format": "opera"}),
-        ("podcast.status", {"job_id": 7}),
+        ("podcast.submit", {"source_id": "ornek", "user_id": "kullanici-1"}),
+        ("podcast.submit", {"job_id": ID_TWO, "source_id": "ornek"}),
+        ("podcast.submit", {"job_id": "kotu/id", "source_id": "ornek", "user_id": "k1"}),
+        (
+            "podcast.submit",
+            {"job_id": ID_THREE, "source_id": "ornek", "user_id": "k1", "format": "opera"},
+        ),
         ("podcast.cancel", {}),
     ):
         _expect_error(
@@ -163,6 +146,49 @@ def _check_registry(root: str) -> list[str]:
             payload,
         )
 
+    if _dispatch("podcast.cancel", {"job_id": ID_ONE}).get("cancelled") is not True:
+        problems.append("kuyruktaki is iptal edilemedi")
+    if store.get(ID_ONE)["state"] != "cancelled":
+        problems.append("iptal sonrasi durum 'cancelled' olmadi")
+    if _dispatch("podcast.cancel", {"job_id": ID_ONE}).get("cancelled") is not False:
+        problems.append("bitmis is icin ikinci iptal True dondu")
+    _expect_error(
+        problems,
+        "bilinmeyen is icin podcast.cancel",
+        "not_found",
+        _dispatch,
+        "podcast.cancel",
+        {"job_id": "YOKBOYLEBIRIS"},
+    )
+
+    _expect_error(
+        problems,
+        "anahtarsiz tek_ogretici submit'i",
+        "llm_unavailable",
+        _dispatch,
+        "podcast.submit",
+        {"job_id": ID_FOUR, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
+    )
+    _expect_error(
+        problems,
+        "anahtarsiz ogrenci_hoca submit'i",
+        "llm_unavailable",
+        _dispatch,
+        "podcast.submit",
+        {"job_id": ID_FIVE, "source_id": "ornek", "user_id": "k1", "format": "ogrenci_hoca"},
+    )
+
+    from .protocol import CapabilityError
+
+    try:
+        _dispatch(
+            "podcast.submit",
+            {"job_id": ID_SIX, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
+        )
+    except CapabilityError as exc:
+        if "duz_okuma" not in str(exc):
+            problems.append("llm_unavailable mesaji kullanilabilir formatlari soylemiyor")
+
     _expect_error(
         problems,
         "bilinmeyen yetenek",
@@ -171,27 +197,203 @@ def _check_registry(root: str) -> list[str]:
         "podcast.bilinmeyen",
         {},
     )
+    _expect_error(
+        problems,
+        "silinen podcast.status",
+        "unsupported_capability",
+        _dispatch,
+        "podcast.status",
+        {"job_id": ID_TWO},
+    )
+    _expect_error(
+        problems,
+        "silinen podcast.result",
+        "unsupported_capability",
+        _dispatch,
+        "podcast.result",
+        {"job_id": ID_TWO},
+    )
 
     capabilities.configure(store, llm_ready=True)
     with_key = _dispatch(
-        "podcast.submit", {"source_id": "ornek", "format": "tek_ogretici"}
+        "podcast.submit",
+        {"job_id": ID_SEVEN, "source_id": "ornek", "user_id": "k1", "format": "tek_ogretici"},
     )
     if with_key.get("state") != "queued":
         problems.append(f"anahtar varken tek_ogretici submit'i kabul edilmedi: {with_key}")
 
     small = jobs.JobStore(root=os.path.join(root, "busy"), workers=1, max_jobs=1, stage_secs=0.0)
     capabilities.configure(small, llm_ready=False)
-    _dispatch("podcast.submit", {"source_id": "ilk"})
+    _dispatch("podcast.submit", {"job_id": ID_EIGHT, "source_id": "ilk", "user_id": "k1"})
     _expect_error(
         problems,
         "kuyruk tavani asildiginda submit",
         "busy",
         _dispatch,
         "podcast.submit",
-        {"source_id": "ikinci"},
+        {"job_id": ID_NINE, "source_id": "ikinci", "user_id": "k1"},
     )
 
     capabilities.configure(None, llm_ready=False)
+    return problems
+
+
+class _FakeReporter:
+    def __init__(self, refuse: str = "", unavailable: bool = False) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.refuse = refuse
+        self.unavailable = unavailable
+
+    def report(self, school: str, record: dict) -> dict:
+        from . import backend
+
+        self.calls.append(("report", dict(record)))
+        if self.unavailable:
+            raise backend.BackendUnavailable("prova")
+        if self.refuse and record["state"] == self.refuse:
+            raise backend.BackendRefused("expired", "prova reddi")
+        return {"stored": True}
+
+    def upload(self, school: str, record: dict, path, content_type: str = "audio/mpeg") -> dict:
+        from . import backend
+
+        self.calls.append(("upload", dict(record)))
+        if self.unavailable:
+            raise backend.BackendUnavailable("prova")
+        return {"key": f"podcast/{path.name}", "size": path.stat().st_size}
+
+    def states(self) -> list:
+        return [(kind, record["state"]) for kind, record in self.calls]
+
+
+def _report_store(root: str, name: str, reporter, output_root: str, audio: bool = True):
+    from . import jobs
+
+    def runner(ctx) -> None:
+        ctx.check()
+        ctx.progress("kaynak", 0.0)
+        ctx.check()
+        ctx.progress("metin", 0.5)
+        ctx.check()
+        ctx.finish(
+            audio_id="ders.mp3" if audio else "yok.mp3",
+            duration_secs=2.0,
+            script_id="ders.script.json",
+        )
+
+    os.makedirs(output_root, exist_ok=True)
+    if audio:
+        with open(os.path.join(output_root, "ders.mp3"), "wb") as handle:
+            handle.write(b"ID3prova")
+    store = jobs.JobStore(
+        root=os.path.join(root, name),
+        workers=1,
+        max_jobs=8,
+        stage_secs=0.0,
+        runner=runner,
+        stages=("kaynak", "metin"),
+        job_secs=1.0,
+        output_root=output_root,
+        reporter=reporter,
+    )
+    return store
+
+
+def _check_reports(root: str) -> list[str]:
+    from . import backend, jobs
+
+    problems: list[str] = []
+
+    reporter = _FakeReporter()
+    out_a = os.path.join(root, "rapor-cikti")
+    store = _report_store(root, "rapor", reporter, out_a)
+    store.start()
+    try:
+        record, _ = store.submit(ID_TEN, "ders.pdf", "duz_okuma", user_id="k1", school="okul-1")
+        final = _await_state(store, ID_TEN, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
+        if final["state"] != jobs.STATE_DONE:
+            problems.append(f"raporlu is 'done' olmadi: {final['state']} {final['error_code']}")
+        kinds = [kind for kind, _ in reporter.calls]
+        states = [record["state"] for kind, record in reporter.calls if kind == "report"]
+        if not kinds or kinds[0] != "report" or states[0] != "queued":
+            problems.append(f"ilk rapor 'queued' degil: {reporter.states()}")
+        if kinds.count("upload") != 1:
+            problems.append(f"yukleme tam bir kez yapilmadi: {kinds}")
+        elif kinds[-1] != "report" or kinds[-2] != "upload" or states[-1] != "done":
+            problems.append(f"yukleme 'done' raporundan once gelmedi: {reporter.states()}")
+        if states != sorted(states, key=["queued", "running", "done"].index):
+            problems.append(f"rapor durumlari geriye gitti: {states}")
+        uploads = [record for kind, record in reporter.calls if kind == "upload"]
+        if not uploads or uploads[0].get("duration_secs") != 2.0:
+            problems.append(f"yukleme kaydi sureyi tasimiyor: {uploads}")
+        first_report = reporter.calls[0][1] if reporter.calls else {}
+        for field in ("job_id", "source_id", "format", "user_id", "state", "stage", "progress"):
+            if field not in first_report:
+                problems.append(f"rapor govdesinde '{field}' yok")
+        if store.flush_reports() != 0:
+            problems.append("raporlu is bitince bekleyen rapor kaldi")
+    finally:
+        store.shutdown()
+
+    refused = _FakeReporter(refuse="done")
+    out_b = os.path.join(root, "rapor-ret")
+    store = _report_store(root, "rapor-ret", refused, out_b)
+    store.start()
+    try:
+        store.submit("20202020-2020-7020-8020-202020202020", "ders.pdf", "duz_okuma", user_id="k1", school="okul-1")
+        final = _await_state(
+            store, "20202020-2020-7020-8020-202020202020", (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0
+        )
+        if final["state"] != jobs.STATE_FAILED:
+            problems.append(f"reddedilen rapor isi dusurmedi: {final['state']}")
+        if final["error_code"] != "expired":
+            problems.append(f"red kodu ise yazilmadi: {final['error_code']}")
+        if final["audio_id"] is not None:
+            problems.append("reddedilen done raporu yine de audio_id yazdi")
+    finally:
+        store.shutdown()
+
+    detached = _FakeReporter(unavailable=True)
+    out_c = os.path.join(root, "rapor-gecici")
+    store = _report_store(root, "rapor-gecici", detached, out_c)
+    try:
+        store.submit("30303030-3030-7030-8030-303030303030", "ders.pdf", "duz_okuma", user_id="k1", school="okul-1")
+        pending = store.flush_reports()
+        if pending < 1:
+            problems.append("baglanti yokken rapor beklemeye alinmadi")
+        if store.get("30303030-3030-7030-8030-303030303030")["state"] != jobs.STATE_QUEUED:
+            problems.append("baglanti yokken is yanlislikla dusuruldu")
+        healthy = _FakeReporter()
+        store.reporter = healthy
+        if store.flush_reports() != pending:
+            problems.append("bekleyen rapor baglanti gelince gonderilmedi")
+        if not healthy.calls:
+            problems.append("baglanti gelince hicbir rapor gitmedi")
+    finally:
+        store.shutdown()
+
+    silent = _FakeReporter()
+    out_d = os.path.join(root, "rapor-sessiz")
+    store = _report_store(root, "rapor-sessiz", silent, out_d, audio=False)
+    store.start()
+    try:
+        store.submit("40404040-4040-7040-8040-404040404040", "ders.pdf", "duz_okuma", user_id="k1", school="okul-1")
+        final = _await_state(
+            store, "40404040-4040-7040-8040-404040404040", (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0
+        )
+        if final["state"] != jobs.STATE_FAILED:
+            problems.append(f"sesi olmayan is 'done' olmadi mi: {final['state']}")
+        if final["error_code"] != "audio_missing":
+            problems.append(f"ses yokken hata kodu yanlis: {final['error_code']}")
+        if any(kind == "upload" for kind, _ in silent.calls):
+            problems.append("var olmayan ses icin yukleme denendi")
+        if ("report", "done") in silent.states():
+            problems.append("sesi olmayan is icin 'done' raporu gonderildi")
+    finally:
+        store.shutdown()
+
+    if backend.current() is not None:
+        problems.append("dogrulama sirasinda beklenmedik bir backend istemcisi bagli")
     return problems
 
 
@@ -210,7 +412,7 @@ def _check_job_store(root: str) -> list[str]:
 
     persist_root = os.path.join(root, "persist")
     store = jobs.JobStore(root=persist_root, workers=1, max_jobs=8, stage_secs=0.0)
-    record, _ = store.submit("kaynak-1", "duz_okuma")
+    record, _ = store.submit("11111111-1111-7111-8111-111111111111", "kaynak-1", "duz_okuma")
     job_id = record["job_id"]
 
     path = os.path.join(persist_root, f"{job_id}.json")
@@ -261,10 +463,10 @@ def _check_job_store(root: str) -> list[str]:
 
     sweep_root = os.path.join(root, "sweep")
     seed = jobs.JobStore(root=sweep_root, workers=1, max_jobs=8, stage_secs=0.0)
-    running_record, _ = seed.submit("kaynak-2", "duz_okuma")
+    running_record, _ = seed.submit("22222222-2222-7222-8222-222222222222", "kaynak-2", "duz_okuma")
     running_id = running_record["job_id"]
     seed.transition(running_id, jobs.STATE_RUNNING)
-    queued_record, _ = seed.submit("kaynak-3", "duz_okuma")
+    queued_record, _ = seed.submit("33333333-3333-7333-8333-333333333333", "kaynak-3", "duz_okuma")
     queued_id = queued_record["job_id"]
 
     swept_store = jobs.JobStore(root=sweep_root, workers=1, max_jobs=8, stage_secs=0.0)
@@ -292,22 +494,27 @@ def _check_lifecycle(root: str) -> list[str]:
     done_store.start()
     capabilities.configure(done_store, llm_ready=False)
     try:
-        submitted = _dispatch("podcast.submit", {"source_id": "kaynak", "format": "duz_okuma"})
+        submitted = _dispatch(
+            "podcast.submit",
+            {"job_id": "44444444-4444-7444-8444-444444444444", "source_id": "kaynak", "user_id": "kullanici-1"},
+        )
         job_id = submitted["job_id"]
+        if job_id != "44444444-4444-7444-8444-444444444444":
+            problems.append(f"submit backend'in verdigi is kimligini dondurmedi: {job_id}")
         final = _await_state(done_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_DONE:
             problems.append(f"sahte hat 'done' ile bitmedi: {final['state']} {final['error_code']}")
         else:
-            reported = _dispatch("podcast.status", {"job_id": job_id})
-            if reported.get("progress") != 1.0:
-                problems.append(f"biten isin ilerlemesi 1.0 degil: {reported.get('progress')}")
-            payload = _dispatch("podcast.result", {"job_id": job_id})
-            if not payload.get("audio_id") or not payload.get("script_id"):
-                problems.append(f"podcast.result kimlikleri uretmedi: {payload}")
-            if not isinstance(payload.get("duration_secs"), float):
-                problems.append(f"duration_secs bir ondalik degil: {payload.get('duration_secs')}")
-            if payload.get("format") != "duz_okuma":
-                problems.append(f"podcast.result format alanini kaybetti: {payload}")
+            if final.get("progress") != 1.0:
+                problems.append(f"biten isin ilerlemesi 1.0 degil: {final.get('progress')}")
+            if not final.get("audio_id") or not final.get("script_id"):
+                problems.append(f"biten is kimlikleri uretmedi: {final.get('audio_id')}")
+            if not isinstance(final.get("duration_secs"), float):
+                problems.append(f"duration_secs bir ondalik degil: {final.get('duration_secs')}")
+            if final.get("format") != "duz_okuma":
+                problems.append(f"kayit format alanini kaybetti: {final.get('format')}")
+            if final.get("user_id") != "kullanici-1":
+                problems.append(f"kayit kullaniciyi kaybetti: {final.get('user_id')}")
     finally:
         done_store.shutdown()
 
@@ -317,7 +524,10 @@ def _check_lifecycle(root: str) -> list[str]:
     cancel_store.start()
     capabilities.configure(cancel_store, llm_ready=False)
     try:
-        submitted = _dispatch("podcast.submit", {"source_id": "kaynak"})
+        submitted = _dispatch(
+            "podcast.submit",
+            {"job_id": "55555555-5555-7555-8555-555555555555", "source_id": "kaynak", "user_id": "kullanici-1"},
+        )
         job_id = submitted["job_id"]
         started = _await_state(cancel_store, job_id, (jobs.STATE_RUNNING,), 10.0)
         if started["state"] != jobs.STATE_RUNNING:
@@ -346,7 +556,7 @@ def _check_cancel_race(root: str) -> list[str]:
     race_root = os.path.join(root, "race")
     store = jobs.JobStore(root=race_root, workers=1, max_jobs=8, stage_secs=0.0)
 
-    record, _ = store.submit("kaynak-yaris", "duz_okuma")
+    record, _ = store.submit("66666666-6666-7666-8666-666666666666", "kaynak-yaris", "duz_okuma")
     job_id = record["job_id"]
     store.transition(job_id, jobs.STATE_RUNNING)
     if store.cancel(job_id) is not True:
@@ -374,7 +584,7 @@ def _check_early_failure(root: str) -> list[str]:
     store = jobs.JobStore(
         root=os.path.join(root, "erken"), workers=1, max_jobs=8, stage_secs=0.0
     )
-    record, _ = store.submit("kaynak-erken", "duz_okuma")
+    record, _ = store.submit("77777777-7777-7777-8777-777777777777", "kaynak-erken", "duz_okuma")
     job_id = record["job_id"]
     try:
         failed = store.fail(job_id, "kaynak_yok")
@@ -460,8 +670,8 @@ def _check_record_schema(root: str) -> list[str]:
     problems: list[str] = []
     schema_root = os.path.join(root, "sema")
     seed = jobs.JobStore(root=schema_root, workers=1, max_jobs=8, stage_secs=0.0)
-    healthy_id = seed.submit("saglam", "duz_okuma")[0]["job_id"]
-    broken_id = seed.submit("bozuk", "duz_okuma")[0]["job_id"]
+    healthy_id = seed.submit("88888888-8888-7888-8888-888888888888", "saglam", "duz_okuma")[0]["job_id"]
+    broken_id = seed.submit("99999999-9999-7999-8999-999999999999", "bozuk", "duz_okuma")[0]["job_id"]
 
     broken_path = os.path.join(schema_root, f"{broken_id}.json")
     with open(broken_path, "r", encoding="utf-8") as handle:
@@ -508,7 +718,9 @@ def _check_shutdown(root: str) -> list[str]:
     )
     store.start()
     try:
-        job_id = store.submit("uzun-is", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(
+            "12121212-1212-7212-8212-121212121212", "uzun-is", "duz_okuma"
+        )[0]["job_id"]
         started = _await_state(store, job_id, (jobs.STATE_RUNNING,), 10.0)
         if started["state"] != jobs.STATE_RUNNING:
             problems.append(f"uzun is kosmaya baslamadi: {started['state']}")
@@ -561,6 +773,42 @@ def _check_framing() -> list[str]:
     if message.get("protocol") != "hab/2":
         problems.append(f"Hello cercevesi hab/2 bildirmiyor: {message.get('protocol')}")
 
+    call = protocol.build_capability_call(
+        "iz-1", "okul-1", protocol.PODCAST_REPORT_CAPABILITY, {"job_id": "j1"}
+    )
+    if call.get("capability") != "podcast.report" or call.get("school") != "okul-1":
+        problems.append(f"yetenek cagri cercevesi yanlis: {call}")
+    parsed = protocol.parse_capability_response(
+        {"status": "ok", "id": "iz-1", "school": "okul-1", "payload": {"stored": True}},
+        "iz-1",
+    )
+    if parsed.get("stored") is not True:
+        problems.append(f"yetenek cevabi cozulemedi: {parsed}")
+    try:
+        protocol.parse_capability_response(
+            {"status": "err", "id": "iz-1", "school": "okul-1", "code": "expired", "message": "x"},
+            "iz-1",
+        )
+        problems.append("reddedilen yetenek cevabi hata firlatmadi")
+    except protocol.CapabilityError as exc:
+        if exc.code != "expired":
+            problems.append(f"red kodu kaybedildi: {exc.code}")
+    upload = protocol.build_upload_request("iz-2", "okul-1", "j1", "ses.mp3", "audio/mpeg", 12, 3.5)
+    if upload.get("upload") is not True or upload.get("size") != 12:
+        problems.append(f"yukleme cercevesi yanlis: {upload}")
+    if protocol.parse_upload_response(
+        {"status": "ok", "id": "iz-2", "school": "okul-1", "key": "podcast/j1.mp3", "size": 12}
+    ).get("key") != "podcast/j1.mp3":
+        problems.append("yukleme cevabi cozulemedi")
+    try:
+        protocol.parse_upload_response(
+            {"status": "err", "id": "iz-2", "school": "okul-1", "code": "unknown_job", "message": "x"}
+        )
+        problems.append("reddedilen yukleme cevabi hata firlatmadi")
+    except protocol.CapabilityError as exc:
+        if exc.code != "unknown_job":
+            problems.append(f"yukleme red kodu kaybedildi: {exc.code}")
+
     try:
         protocol.parse_greeting({"code": "unauthorized", "message": "bad token"})
         problems.append("reddedilen greeting hata uretmedi")
@@ -579,7 +827,7 @@ def _check_framing() -> list[str]:
         {
             "id": "r1",
             "school": "okul-a",
-            "capability": "podcast.status",
+            "capability": "podcast.submit",
             "payload": {},
             "deadline_ms": 60000,
         }
@@ -593,7 +841,7 @@ def _check_framing() -> list[str]:
     if protocol.build_api_request("r1", "okul-a", "/auth/me")["school"] != "okul-a":
         problems.append("ApiRequest okulu tasimiyor")
     try:
-        protocol.parse_request({"id": "r1", "capability": "podcast.status"})
+        protocol.parse_request({"id": "r1", "capability": "podcast.submit"})
         problems.append("okulsuz istek kabul edildi")
     except protocol.CapabilityError:
         pass
@@ -841,7 +1089,10 @@ def _check_pipeline(root: str) -> list[str]:
     ok_store.start()
     capabilities.configure(ok_store, llm_ready=False)
     try:
-        job_id = _dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = _dispatch(
+            "podcast.submit",
+            {"job_id": ID_ONE, "source_id": "ders.pdf", "user_id": "k1"},
+        )["job_id"]
         final = _await_state(ok_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_DONE:
             problems.append(
@@ -849,17 +1100,16 @@ def _check_pipeline(root: str) -> list[str]:
                 f"{final['state']} {final['error_code']}"
             )
         else:
-            payload = _dispatch("podcast.result", {"job_id": job_id})
-            if payload.get("audio_id") != "bolum-1.mp3":
-                problems.append(f"result audio_id yanlis: {payload.get('audio_id')}")
-            if payload.get("script_id") != "bolum-1.txt":
-                problems.append(f"result script_id yanlis: {payload.get('script_id')}")
-            if payload.get("duration_secs") != 123.5:
-                problems.append(f"result duration_secs yanlis: {payload.get('duration_secs')}")
-            if payload.get("audio_ids") != ["bolum-1.mp3", "bolum-2.mp3"]:
-                problems.append(f"result audio_ids yanlis: {payload.get('audio_ids')}")
-            if payload.get("script_ids") != ["bolum-1.txt", "bolum-2.txt"]:
-                problems.append(f"result script_ids yanlis: {payload.get('script_ids')}")
+            if final.get("audio_id") != "bolum-1.mp3":
+                problems.append(f"kayit audio_id yanlis: {final.get('audio_id')}")
+            if final.get("script_id") != "bolum-1.txt":
+                problems.append(f"kayit script_id yanlis: {final.get('script_id')}")
+            if final.get("duration_secs") != 123.5:
+                problems.append(f"kayit duration_secs yanlis: {final.get('duration_secs')}")
+            if final.get("audio_ids") != ["bolum-1.mp3", "bolum-2.mp3"]:
+                problems.append(f"kayit audio_ids yanlis: {final.get('audio_ids')}")
+            if final.get("script_ids") != ["bolum-1.txt", "bolum-2.txt"]:
+                problems.append(f"kayit script_ids yanlis: {final.get('script_ids')}")
     finally:
         ok_store.shutdown()
 
@@ -867,7 +1117,10 @@ def _check_pipeline(root: str) -> list[str]:
     quiet_store.start()
     capabilities.configure(quiet_store, llm_ready=False)
     try:
-        job_id = _dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = _dispatch(
+            "podcast.submit",
+            {"job_id": ID_TWO, "source_id": "ders.pdf", "user_id": "k1"},
+        )["job_id"]
         final = _await_state(quiet_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"mp3 uretilmeyen is 'failed' olmadi: {final['state']}")
@@ -882,7 +1135,10 @@ def _check_pipeline(root: str) -> list[str]:
     missing_store.start()
     capabilities.configure(missing_store, llm_ready=False)
     try:
-        job_id = _dispatch("podcast.submit", {"source_id": "yok.pdf"})["job_id"]
+        job_id = _dispatch(
+            "podcast.submit",
+            {"job_id": ID_THREE, "source_id": "yok.pdf", "user_id": "k1"},
+        )["job_id"]
         final = _await_state(missing_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"kaynagi olmayan is 'failed' olmadi: {final['state']}")
@@ -965,7 +1221,7 @@ def _check_api_engine(root: str) -> list[str]:
     )
     store.start()
     try:
-        job_id = store.submit("bos.pdf", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(ID_FOUR, "bos.pdf", "duz_okuma", user_id="k1", school="okul")[0]["job_id"]
         final = _await_state(store, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"metin katmani olmayan PDF 'failed' olmadi: {final['state']}")
@@ -989,7 +1245,7 @@ def _check_api_engine(root: str) -> list[str]:
     )
     missing.start()
     try:
-        job_id = missing.submit("yok.pdf", "duz_okuma")[0]["job_id"]
+        job_id = missing.submit(ID_FIVE, "yok.pdf", "duz_okuma", user_id="k1", school="okul")[0]["job_id"]
         final = _await_state(missing, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"kaynagi olmayan api isi 'failed' olmadi: {final['state']}")
@@ -1039,6 +1295,7 @@ def validate() -> int:
     problems = _guard("cerceveleme", _check_framing)
     with tempfile.TemporaryDirectory(prefix="podcast-validate-") as root:
         problems += _guard("is deposu", _check_job_store, root)
+        problems += _guard("rapor kablosu", _check_reports, root)
         problems += _guard("yetenek defteri", _check_registry, root)
         problems += _guard("yasam dongusu", _check_lifecycle, root)
         problems += _guard("iptal yarisi", _check_cancel_race, root)

@@ -138,11 +138,11 @@ CATEGORY_SCALARS = {
 
 SEED_FRAMES = [
     {"id": "01SEED", "school": "01OKUL", "capability": "podcast.submit",
-     "payload": {"file_id": "01FILE", "format": "duz_okuma"}, "deadline_ms": 30000},
-    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.status",
-     "payload": {"job_id": "01JOB"}},
-    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.result",
-     "payload": {"job_id": "01JOB"}},
+     "payload": {"job_id": "01JOB", "source_id": "01FILE", "user_id": "01USER",
+                 "format": "duz_okuma"}, "deadline_ms": 30000},
+    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.report",
+     "payload": {"job_id": "01JOB", "source_id": "01FILE", "user_id": "01USER",
+                 "state": "running"}},
     {"id": "01SEED", "school": "01OKUL", "capability": "podcast.cancel",
      "payload": {"job_id": "01JOB"}},
 ]
@@ -367,7 +367,8 @@ def fuzz(cases: int, seed: int, verbose: bool) -> Report:
                       "r", "01OKUL", v if isinstance(v, str) else "/notes"),
                   (protocol.ApiRefused, ValueError), tracer)
             for capability in capabilities.names():
-                body = {"job_id": value, "file_id": value, "format": value}
+                body = {"job_id": value, "source_id": value, "user_id": value,
+                        "format": value}
                 probe(report, "dispatch", name, (capability, body),
                       lambda c=capability, b=body:
                       capabilities.dispatch(c, "01OKUL", b),

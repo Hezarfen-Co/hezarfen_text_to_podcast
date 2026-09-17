@@ -101,7 +101,14 @@ class SecretLeakRegression(unittest.TestCase):
         self._stores.append(store)
         capabilities.configure(store, llm_ready=True)
         job_id = capabilities.dispatch(
-            "podcast.submit", "okul-a", {"source_id": "ders.pdf", "format": "tek_ogretici"}
+            "podcast.submit",
+            "okul-a",
+            {
+                "job_id": "e7c1d000-0000-4000-8000-000000000001",
+                "source_id": "ders.pdf",
+                "user_id": "kullanici-a",
+                "format": "tek_ogretici",
+            },
         )["job_id"]
         store.transition(job_id, jobs.STATE_RUNNING)
         store.finish(job_id, audio_id="a/b.mp3", duration_secs=1.0, script_id="a/b.json")

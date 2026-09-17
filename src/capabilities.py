@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import jobs
+from . import jobs, protocol
 from .protocol import CapabilityError
 
 Handler = Callable[[str, dict], dict]
@@ -62,15 +62,10 @@ def _optional_choice(payload: dict, key: str, choices: tuple, default: str) -> s
     return normalized
 
 
-def _lookup(store: jobs.JobStore, job_id: str) -> dict:
-    try:
-        return store.get(job_id)
-    except jobs.JobNotFound as exc:
-        raise CapabilityError("not_found", str(exc)) from exc
-
-
 def submit(school: str, payload: dict) -> dict:
+    job_id = _require_text(payload, "job_id")
     source_id = _require_text(payload, "source_id")
+    user_id = _require_text(payload, "user_id")
     job_format = _optional_choice(payload, "format", FORMATS, DEFAULT_FORMAT)
     if job_format in LLM_FORMATS and not _llm_ready:
         raise CapabilityError(
@@ -80,41 +75,21 @@ def submit(school: str, payload: dict) -> dict:
         )
     store = _active_store()
     try:
-        record, eta = store.submit(source_id, job_format)
+        record, eta = store.submit(
+            job_id, source_id, job_format, user_id=user_id, school=school
+        )
+    except jobs.JobExists as exc:
+        raise CapabilityError("conflict", str(exc)) from exc
     except jobs.JobStoreFull as exc:
         raise CapabilityError("busy", str(exc)) from exc
+    except ValueError as exc:
+        raise CapabilityError("bad_request", str(exc)) from exc
     except OSError as exc:
         raise CapabilityError("internal", f"is durumu diske yazilamadi: {exc}") from exc
-    return {"job_id": record["job_id"], "state": record["state"], "eta_secs": eta}
-
-
-def status(school: str, payload: dict) -> dict:
-    job_id = _require_text(payload, "job_id")
-    record = _lookup(_active_store(), job_id)
     return {
         "job_id": record["job_id"],
         "state": record["state"],
-        "stage": record["stage"],
-        "progress": record["progress"],
-        "error_code": record["error_code"],
-    }
-
-
-def result(school: str, payload: dict) -> dict:
-    job_id = _require_text(payload, "job_id")
-    record = _lookup(_active_store(), job_id)
-    if record["state"] != jobs.STATE_DONE:
-        raise CapabilityError(
-            "not_ready", f"is henuz hazir degil: {job_id} durum={record['state']}"
-        )
-    return {
-        "job_id": record["job_id"],
-        "audio_id": record["audio_id"],
-        "duration_secs": record["duration_secs"],
-        "script_id": record["script_id"],
-        "audio_ids": list(record.get("audio_ids") or []),
-        "script_ids": list(record.get("script_ids") or []),
-        "format": record["format"],
+        "eta_secs": eta,
     }
 
 
@@ -130,10 +105,10 @@ def cancel(school: str, payload: dict) -> dict:
     return {"job_id": job_id, "cancelled": cancelled}
 
 
+REPORT_CAPABILITY = protocol.PODCAST_REPORT_CAPABILITY
+
 REGISTRY: dict[str, Handler] = {
     "podcast.submit": submit,
-    "podcast.status": status,
-    "podcast.result": result,
     "podcast.cancel": cancel,
 }
 

@@ -401,6 +401,7 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         self.output_root = root / "cikti"
         self.job_root = root / "isler"
         make_pdf(self.media_root / "ders.pdf", PAGE_TEXT)
+        self._counter = 0
         self.settings = config.Config(require_token=False)
         self.settings.media_root = str(self.media_root)
         self.settings.output_root = str(self.output_root)
@@ -417,6 +418,10 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         self.stub.server_close()
         self._tmp.cleanup()
         super().tearDown()
+
+    def job_id(self) -> str:
+        self._counter += 1
+        return f"aaaaaaaa-aaaa-7aaa-8aaa-{self._counter:012x}"
 
     def run_job(self, source_id: str, job_format: str):
         store = jobs.JobStore(
@@ -438,7 +443,7 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         store.update_progress = recording
         store.start()
         try:
-            job_id = store.submit(source_id, job_format)[0]["job_id"]
+            job_id = store.submit(self.job_id(), source_id, job_format)[0]["job_id"]
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
                 record = store.get(job_id)
@@ -558,7 +563,7 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         )
         store.start()
         try:
-            job_id = store.submit("ders.pdf", "duz_okuma")[0]["job_id"]
+            job_id = store.submit(self.job_id(), "ders.pdf", "duz_okuma")[0]["job_id"]
             deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline:
                 if store.get(job_id)["stage"] == api_engine.STAGES[3]:

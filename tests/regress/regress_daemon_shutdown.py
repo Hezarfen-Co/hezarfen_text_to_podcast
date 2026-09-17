@@ -52,7 +52,8 @@ class DaemonShutdownRegression(unittest.TestCase):
 
     def test_worker_threads_must_be_daemon_or_interpreter_joins_them_on_exit(self) -> None:
         self.store.start()
-        job_id = self.store.submit("uzun-is", "duz_okuma")[0]["job_id"]
+        job_id = "6e5b0001-0000-4000-8000-000000000001"
+        self.store.submit(job_id, "uzun-is", "duz_okuma")
         wait_for(self.store, job_id, (jobs.STATE_RUNNING,), 5.0)
         threads = self.worker_threads()
         self.assertTrue(threads, "isci thread bulunamadi")
@@ -65,7 +66,8 @@ class DaemonShutdownRegression(unittest.TestCase):
 
     def test_shutdown_does_not_hang_longer_than_the_given_timeout(self) -> None:
         self.store.start()
-        job_id = self.store.submit("uzun-is", "duz_okuma")[0]["job_id"]
+        job_id = "6e5b0001-0000-4000-8000-000000000002"
+        self.store.submit(job_id, "uzun-is", "duz_okuma")
         running = wait_for(self.store, job_id, (jobs.STATE_RUNNING,), 5.0)
         self.assertEqual(running["state"], jobs.STATE_RUNNING, "uzun is kosmaya baslamadi")
         started = time.monotonic()
@@ -85,7 +87,8 @@ class DaemonShutdownRegression(unittest.TestCase):
 
     def test_shutdown_must_set_the_cancel_flag_on_running_jobs(self) -> None:
         self.store.start()
-        job_id = self.store.submit("uzun-is", "duz_okuma")[0]["job_id"]
+        job_id = "6e5b0001-0000-4000-8000-000000000003"
+        self.store.submit(job_id, "uzun-is", "duz_okuma")
         wait_for(self.store, job_id, (jobs.STATE_RUNNING,), 5.0)
         self.store.shutdown(timeout=0.3)
         self.assertTrue(
@@ -95,7 +98,8 @@ class DaemonShutdownRegression(unittest.TestCase):
 
     def test_cancel_flag_set_at_shutdown_must_also_be_written_to_disk(self) -> None:
         self.store.start()
-        job_id = self.store.submit("uzun-is", "duz_okuma")[0]["job_id"]
+        job_id = "6e5b0001-0000-4000-8000-000000000004"
+        self.store.submit(job_id, "uzun-is", "duz_okuma")
         wait_for(self.store, job_id, (jobs.STATE_RUNNING,), 5.0)
         self.store.shutdown(timeout=0.3)
         reopened = jobs.JobStore(

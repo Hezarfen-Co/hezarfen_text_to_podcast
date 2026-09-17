@@ -41,8 +41,12 @@ class SchemaValidationRegression(unittest.TestCase):
                 continue
             with self.subTest(missing=field):
                 seed = self.make_store()
-                healthy_id = seed.submit("saglam", "duz_okuma")[0]["job_id"]
-                corrupt_id = seed.submit("bozuk", "duz_okuma")[0]["job_id"]
+                healthy_id = seed.submit(
+                    "5a1e0001-0000-4000-8000-000000000001", "saglam", "duz_okuma"
+                )[0]["job_id"]
+                corrupt_id = seed.submit(
+                    "5a1e0001-0000-4000-8000-000000000002", "bozuk", "duz_okuma"
+                )[0]["job_id"]
                 corrupt = self.read_record(corrupt_id)
                 corrupt.pop(field)
                 self.write_record(corrupt_id, corrupt)
@@ -72,7 +76,9 @@ class SchemaValidationRegression(unittest.TestCase):
 
     def test_an_old_record_without_the_plural_identifier_fields_must_still_load(self) -> None:
         seed = self.make_store()
-        job_id = seed.submit("eski", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "5a1e0001-0000-4000-8000-000000000003", "eski", "duz_okuma"
+        )[0]["job_id"]
         old = self.read_record(job_id)
         for field in FIELDS_ABSENT_FROM_OLD_RECORDS:
             old.pop(field, None)
@@ -89,7 +95,9 @@ class SchemaValidationRegression(unittest.TestCase):
 
     def test_a_record_in_an_unknown_state_must_be_skipped(self) -> None:
         seed = self.make_store()
-        job_id = seed.submit("gecersiz", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "5a1e0001-0000-4000-8000-000000000004", "gecersiz", "duz_okuma"
+        )[0]["job_id"]
         record = self.read_record(job_id)
         record["state"] = "yariyolda"
         self.write_record(job_id, record)
@@ -100,7 +108,9 @@ class SchemaValidationRegression(unittest.TestCase):
 
     def test_a_record_whose_identifier_does_not_match_the_file_name_must_be_skipped(self) -> None:
         seed = self.make_store()
-        job_id = seed.submit("kimlik", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "5a1e0001-0000-4000-8000-000000000005", "kimlik", "duz_okuma"
+        )[0]["job_id"]
         record = self.read_record(job_id)
         record["job_id"] = "BASKABIRKIMLIK00000000000"
         self.write_record(job_id, record)
@@ -133,6 +143,8 @@ class SchemaValidationRegression(unittest.TestCase):
                 "audio_id",
                 "duration_secs",
                 "script_id",
+                "user_id",
+                "school",
                 "created_at",
                 "updated_at",
             },

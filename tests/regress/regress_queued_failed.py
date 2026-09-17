@@ -37,7 +37,9 @@ class QueuedFailedRegression(unittest.TestCase):
 
     def test_a_job_that_fails_before_starting_must_be_able_to_become_failed(self) -> None:
         store = self.make_store("erken")
-        job_id = store.submit("kaynak-erken", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(
+            "7b2d0001-0000-4000-8000-000000000001", "kaynak-erken", "duz_okuma"
+        )[0]["job_id"]
         try:
             record = store.fail(job_id, "source_not_found")
         except jobs.InvalidTransition as exc:
@@ -47,15 +49,19 @@ class QueuedFailedRegression(unittest.TestCase):
 
     def test_a_failed_job_must_not_occupy_a_slot_in_the_max_jobs_quota(self) -> None:
         store = self.make_store("kota", max_jobs=1)
-        job_id = store.submit("ilk", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(
+            "7b2d0001-0000-4000-8000-000000000002", "ilk", "duz_okuma"
+        )[0]["job_id"]
         with self.assertRaises(jobs.JobStoreFull):
-            store.submit("ikinci", "duz_okuma")
+            store.submit("7b2d0001-0000-4000-8000-000000000003", "ikinci", "duz_okuma")
         store.fail(job_id, "source_not_found")
-        store.submit("ikinci", "duz_okuma")
+        store.submit("7b2d0001-0000-4000-8000-000000000003", "ikinci", "duz_okuma")
 
     def test_a_failed_job_must_not_be_requeued_on_every_startup(self) -> None:
         seed = self.make_store("acilis")
-        job_id = seed.submit("kaynak-erken", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(
+            "7b2d0001-0000-4000-8000-000000000004", "kaynak-erken", "duz_okuma"
+        )[0]["job_id"]
         seed.fail(job_id, "source_not_found")
 
         reopened = self.make_store("acilis")
@@ -72,15 +78,21 @@ class QueuedFailedRegression(unittest.TestCase):
 
     def test_no_job_must_stay_queued_forever(self) -> None:
         store = self.make_store("terminal")
-        for target in (jobs.STATE_RUNNING, jobs.STATE_CANCELLED, jobs.STATE_FAILED):
+        for index, target in enumerate(
+            (jobs.STATE_RUNNING, jobs.STATE_CANCELLED, jobs.STATE_FAILED)
+        ):
             with self.subTest(target=target):
-                job_id = store.submit("kaynak", "duz_okuma")[0]["job_id"]
+                job_id = store.submit(
+                    f"7b2d0002-0000-4000-8000-{index:012x}", "kaynak", "duz_okuma"
+                )[0]["job_id"]
                 store.transition(job_id, target)
                 self.assertEqual(store.get(job_id)["state"], target)
 
     def test_failed_must_stay_terminal_and_must_not_go_back(self) -> None:
         store = self.make_store("geri")
-        job_id = store.submit("kaynak", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(
+            "7b2d0001-0000-4000-8000-000000000005", "kaynak", "duz_okuma"
+        )[0]["job_id"]
         store.fail(job_id, "source_not_found")
         for target in (jobs.STATE_QUEUED, jobs.STATE_RUNNING, jobs.STATE_DONE):
             with self.subTest(target=target):

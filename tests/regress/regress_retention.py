@@ -22,6 +22,8 @@ def _record(job_id, state, updated_at, audio=None, script=None):
         "audio_id": (audio or [""])[0] if audio else None,
         "duration_secs": 1.0,
         "script_id": (script or [""])[0] if script else None,
+        "user_id": "kullanici-1",
+        "school": "okul-1",
         "created_at": updated_at,
         "updated_at": updated_at,
         "audio_ids": audio or [],

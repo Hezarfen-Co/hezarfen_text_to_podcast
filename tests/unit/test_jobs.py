@@ -8,6 +8,10 @@ from pathlib import Path
 
 from src import config, jobs
 
+JOB_ONE = "11111111-1111-7111-8111-111111111111"
+JOB_TWO = "22222222-2222-7222-8222-222222222222"
+JOB_THREE = "33333333-3333-7333-8333-333333333333"
+
 
 def wait_for(store: jobs.JobStore, job_id: str, wanted: tuple, deadline_secs: float) -> dict:
     limit = time.monotonic() + deadline_secs
@@ -62,6 +66,19 @@ class JobIdTests(JobTestCase):
             sorted(prefixes), prefixes, "is kimliginin zaman oneki geriye gitmemeli"
         )
 
+    def test_supplied_job_id_must_be_a_safe_name(self) -> None:
+        store = self.make_store("kotu-kimlik")
+        for bad in ("", "kotus id", "a" * 129, 7):
+            with self.subTest(job_id=bad):
+                with self.assertRaises(ValueError):
+                    store.submit(bad, "x", "duz_okuma")
+
+    def test_duplicate_supplied_job_id_is_refused(self) -> None:
+        store = self.make_store("cift-kimlik")
+        store.submit(JOB_ONE, "x", "duz_okuma")
+        with self.assertRaises(jobs.JobExists):
+            store.submit(JOB_ONE, "x", "duz_okuma")
+
 
 class StateMachineTests(JobTestCase):
     def test_state_set_is_the_documented_five(self) -> None:
@@ -108,7 +125,7 @@ class StateMachineTests(JobTestCase):
 
     def test_illegal_transition_raises_invalid_transition(self) -> None:
         store = self.make_store("gecis")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         with self.assertRaises(jobs.InvalidTransition):
             store.transition(job_id, jobs.STATE_DONE)
 
@@ -121,7 +138,7 @@ class StateMachineTests(JobTestCase):
 class ProgressTests(JobTestCase):
     def test_progress_is_ignored_unless_the_job_is_running(self) -> None:
         store = self.make_store("ilerleme")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         self.assertIsNone(
             store.update_progress(job_id, "ocr", 0.5),
             "kuyruktaki ise ilerleme yazilmamali",
@@ -129,7 +146,7 @@ class ProgressTests(JobTestCase):
 
     def test_progress_is_clamped_to_the_unit_interval(self) -> None:
         store = self.make_store("kirpma")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.transition(job_id, jobs.STATE_RUNNING)
         for given, expected in ((-1.0, 0.0), (0.0, 0.0), (0.5, 0.5), (2.0, 1.0)):
             with self.subTest(given=given):
@@ -141,7 +158,7 @@ class PersistenceTests(JobTestCase):
     def test_submitted_job_is_written_to_disk_atomically(self) -> None:
         root = self.root / "kalici"
         store = self.make_store("kalici")
-        job_id = store.submit("kaynak-1", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "kaynak-1", "duz_okuma")[0]["job_id"]
         path = root / f"{job_id}.json"
         self.assertTrue(path.is_file(), "is durumu diske yazilmadi")
         with open(path, "r", encoding="utf-8") as handle:
@@ -156,7 +173,7 @@ class PersistenceTests(JobTestCase):
 
     def test_reopened_store_recovers_queued_jobs_without_sweeping_them(self) -> None:
         store = self.make_store("yeniden")
-        job_id = store.submit("kaynak-1", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "kaynak-1", "duz_okuma")[0]["job_id"]
         reopened = self.make_store("yeniden")
         self.assertEqual(reopened.get(job_id)["state"], "queued")
         self.assertEqual(reopened.swept, 0, "kuyruktaki is supurulmemeli")
@@ -164,7 +181,7 @@ class PersistenceTests(JobTestCase):
     def test_record_id_must_match_the_file_name(self) -> None:
         root = self.root / "kimlik"
         store = self.make_store("kimlik")
-        job_id = store.submit("kaynak-1", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "kaynak-1", "duz_okuma")[0]["job_id"]
         with open(root / f"{job_id}.json", "r", encoding="utf-8") as handle:
             record = json.load(handle)
         record["job_id"] = "BASKABIRKIMLIK"
@@ -186,9 +203,9 @@ class PersistenceTests(JobTestCase):
 class SweepTests(JobTestCase):
     def test_running_jobs_become_failed_interrupted_on_boot(self) -> None:
         seed = self.make_store("supurme")
-        running_id = seed.submit("kaynak-2", "duz_okuma")[0]["job_id"]
+        running_id = seed.submit(JOB_ONE, "kaynak-2", "duz_okuma")[0]["job_id"]
         seed.transition(running_id, jobs.STATE_RUNNING)
-        queued_id = seed.submit("kaynak-3", "duz_okuma")[0]["job_id"]
+        queued_id = seed.submit(JOB_TWO, "kaynak-3", "duz_okuma")[0]["job_id"]
 
         swept = self.make_store("supurme")
         self.assertEqual(swept.swept, 1, "acilis supurmesi tam olarak 1 is bulmali")
@@ -201,7 +218,7 @@ class SweepTests(JobTestCase):
 
     def test_sweep_is_persisted_so_a_second_boot_finds_nothing(self) -> None:
         seed = self.make_store("iki-acilis")
-        job_id = seed.submit("kaynak", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(JOB_ONE, "kaynak", "duz_okuma")[0]["job_id"]
         seed.transition(job_id, jobs.STATE_RUNNING)
         self.assertEqual(self.make_store("iki-acilis").swept, 1)
         self.assertEqual(
@@ -213,18 +230,18 @@ class SweepTests(JobTestCase):
 class QueueTests(JobTestCase):
     def test_queue_quota_counts_only_queued_and_running_jobs(self) -> None:
         store = self.make_store("kota", max_jobs=2)
-        first = store.submit("a", "duz_okuma")[0]["job_id"]
-        store.submit("b", "duz_okuma")
+        first = store.submit(JOB_ONE, "a", "duz_okuma")[0]["job_id"]
+        store.submit(JOB_TWO, "b", "duz_okuma")
         with self.assertRaises(jobs.JobStoreFull):
-            store.submit("c", "duz_okuma")
+            store.submit(JOB_THREE, "c", "duz_okuma")
         store.cancel(first)
-        store.submit("c", "duz_okuma")
+        store.submit(JOB_THREE, "c", "duz_okuma")
 
     def test_queue_full_error_reports_the_limit(self) -> None:
         store = self.make_store("kota-mesaj", max_jobs=1)
-        store.submit("a", "duz_okuma")
+        store.submit(JOB_ONE, "a", "duz_okuma")
         with self.assertRaises(jobs.JobStoreFull) as raised:
-            store.submit("b", "duz_okuma")
+            store.submit(JOB_TWO, "b", "duz_okuma")
         self.assertEqual(raised.exception.limit, 1)
         self.assertEqual(raised.exception.active, 1)
 
@@ -248,13 +265,13 @@ class QueueTests(JobTestCase):
 class CancellationTests(JobTestCase):
     def test_cancelling_a_queued_job_terminates_it_immediately(self) -> None:
         store = self.make_store("iptal-kuyruk")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         self.assertTrue(store.cancel(job_id))
         self.assertEqual(store.get(job_id)["state"], jobs.STATE_CANCELLED)
 
     def test_cancelling_a_running_job_only_raises_the_flag(self) -> None:
         store = self.make_store("iptal-kosan")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.transition(job_id, jobs.STATE_RUNNING)
         self.assertTrue(store.cancel(job_id))
         record = store.get(job_id)
@@ -263,7 +280,7 @@ class CancellationTests(JobTestCase):
 
     def test_cancelling_a_terminal_job_returns_false(self) -> None:
         store = self.make_store("iptal-bitmis")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.transition(job_id, jobs.STATE_RUNNING)
         store.finish(job_id, audio_id="a", duration_secs=1.0, script_id="s")
         self.assertFalse(store.cancel(job_id))
@@ -274,20 +291,20 @@ class CancellationTests(JobTestCase):
 
     def test_begin_refuses_a_job_cancelled_before_it_started(self) -> None:
         store = self.make_store("baslamadan")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.cancel(job_id)
         self.assertFalse(store.begin(job_id))
         self.assertEqual(store.get(job_id)["state"], jobs.STATE_CANCELLED)
 
     def test_begin_refuses_while_the_store_is_stopping(self) -> None:
         store = self.make_store("kapanirken")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.shutdown(timeout=0.5)
         self.assertFalse(store.begin(job_id))
 
     def test_job_context_sees_cancellation_through_the_store(self) -> None:
         store = self.make_store("baglam")
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         store.transition(job_id, jobs.STATE_RUNNING)
         ctx = jobs.JobContext(store, job_id)
         self.assertFalse(ctx.cancelled())
@@ -302,7 +319,7 @@ class WorkerLoopTests(JobTestCase):
     def test_simulated_pipeline_carries_a_job_to_done(self) -> None:
         store = self.make_store("sahte-hat")
         store.start()
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         final = wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         self.assertEqual(final["state"], jobs.STATE_DONE, final["error_code"])
         self.assertEqual(final["progress"], 1.0)
@@ -316,7 +333,7 @@ class WorkerLoopTests(JobTestCase):
 
         store = self.make_store("patlayan", runner=raising)
         store.start()
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         final = wait_for(store, job_id, (jobs.STATE_FAILED, jobs.STATE_DONE), 10.0)
         self.assertEqual(final["state"], jobs.STATE_FAILED)
         self.assertEqual(final["error_code"], "internal")
@@ -330,7 +347,7 @@ class WorkerLoopTests(JobTestCase):
 
         store = self.make_store("isbirlikci", runner=cooperative)
         store.start()
-        job_id = store.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         wait_for(store, job_id, (jobs.STATE_RUNNING,), 5.0)
         store.cancel(job_id)
         gate.set()
@@ -339,7 +356,7 @@ class WorkerLoopTests(JobTestCase):
 
     def test_start_requeues_jobs_left_queued_from_a_previous_boot(self) -> None:
         seed = self.make_store("yeniden-kuyruk")
-        job_id = seed.submit("x", "duz_okuma")[0]["job_id"]
+        job_id = seed.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
         reopened = self.make_store("yeniden-kuyruk")
         self.assertEqual(reopened.start(), 1, "acilista kuyruktaki is yeniden alinmali")
         final = wait_for(reopened, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
