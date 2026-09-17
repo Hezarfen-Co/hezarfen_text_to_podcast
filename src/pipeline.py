@@ -31,6 +31,12 @@ PIPELINE_MODULE = "router.hat"
 SOURCE_NOT_FOUND = "source_not_found"
 NO_AUDIO = "no_audio"
 
+PROVISION_COMMAND = "bash deploy/setup-local-engine.sh"
+LOCAL_SOURCE_NOTE = (
+    "lokal motorun vendored Hat kaynagi (router/hat.py) artik hicbir repoda yok; "
+    "yol secilebilir ama kaynak geri gelmedikce kosulamaz"
+)
+
 FAKE_WARNING = "SAHTE hat kosuyor, uretilen ses GERCEK DEGIL"
 
 
@@ -61,16 +67,35 @@ def check_pipeline_path(pipeline_path: str) -> Path:
     return root
 
 
-def prepare_path(pipeline_path: str) -> Path:
-    root = check_pipeline_path(pipeline_path)
-    text = str(root)
-    if text not in sys.path:
-        sys.path.append(text)
+def check_local_venv(venv_path: str) -> Path:
+    if not isinstance(venv_path, str) or not venv_path.strip():
+        raise PipelineUnavailable(
+            "PODCAST_LOCAL_VENV tanimsiz; lokal motorun bagimliliklari bir hacimde "
+            f"beklenir. Kurulum (imaj DEGISMEZ): {PROVISION_COMMAND}"
+        )
+    root = Path(venv_path.strip()).expanduser()
+    if not root.is_dir():
+        raise PipelineUnavailable(
+            f"PODCAST_LOCAL_VENV dizini yok: {root}. Bagimliliklar imaja GIRMEZ; "
+            f"hacme kurulur. Kurulum (imaj DEGISMEZ, workflow KOSTURMAZ): "
+            f"{PROVISION_COMMAND}. NOT: {LOCAL_SOURCE_NOTE}"
+        )
     return root
 
 
-def load_pipeline(pipeline_path: str) -> tuple[Any, Any, Any, Any]:
-    root = prepare_path(pipeline_path)
+def prepare_path(pipeline_path: str, venv_path: str = "") -> Path:
+    root = check_pipeline_path(pipeline_path)
+    paths = [str(root)]
+    if venv_path:
+        paths.append(str(check_local_venv(venv_path)))
+    for text in paths:
+        if text not in sys.path:
+            sys.path.append(text)
+    return root
+
+
+def load_pipeline(pipeline_path: str, venv_path: str = "") -> tuple[Any, Any, Any, Any]:
+    root = prepare_path(pipeline_path, venv_path)
     try:
         from router.hat import Hat, HatHatasi, KasitliKesme
         from router.kayit import Kayit
@@ -81,8 +106,8 @@ def load_pipeline(pipeline_path: str) -> tuple[Any, Any, Any, Any]:
     return Hat, HatHatasi, KasitliKesme, Kayit
 
 
-def probe_pipeline(pipeline_path: str) -> dict[str, Any]:
-    prepare_path(pipeline_path)
+def probe_pipeline(pipeline_path: str, venv_path: str = "") -> dict[str, Any]:
+    prepare_path(pipeline_path, venv_path)
     try:
         from router.yonlendirici import Katman, Yonlendirici
     except Exception as exc:
@@ -313,8 +338,11 @@ def make_runner(
 
 
 def build_runner(settings: Any) -> tuple[Callable[[jobs.JobContext], None], dict[str, Any]]:
-    pipeline_factory, pipeline_error, interrupt, ledger_factory = load_pipeline(settings.pipeline_path)
-    probe = probe_pipeline(settings.pipeline_path)
+    venv = getattr(settings, "local_venv", "")
+    pipeline_factory, pipeline_error, interrupt, ledger_factory = load_pipeline(
+        settings.pipeline_path, venv
+    )
+    probe = probe_pipeline(settings.pipeline_path, venv)
     runner = make_runner(
         settings.media_root,
         settings.output_root,

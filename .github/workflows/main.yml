@@ -14,12 +14,12 @@
 #                      onceki tag'e don, sonra bagimsiz dogrula. Yani yesil bir
 #                      push servisi kendiliginden gunceller.
 #
-# HAT KAYNAGI OPSIYONELDIR: imaj vendor/pipeline OLMADAN derlenir ve kosar
-# (Containerfile `COPY vendor /vendor-src` yapar ve agir bagimliliklari kosullu
-# kurar; varsayilan PODCAST_ENGINE=api hicbir zaman hat agaci istemez).
-# PIPELINE_REPO tanimliysa checkout edilir ve lokal motorun torch/easyocr
-# bagimliliklari da kurulur. Her iki durumda da imaj DERLENIR, artefakt yuklenir
-# ve yesil push servisi DEPLOY eder; kosu ozeti hangi kapinin kostugunu yazar.
+# HAT KAYNAGI OPSIYONELDIR: imaj vendor/pipeline OLMADAN derlenir ve kosar.
+# Imaj KASITLI OLARAK YALINDIR — motora gore degismez (build arg'i YOK):
+# agir bagimliliklar (torch/transformers/easyocr) imaja HIC girmez, lokal motor
+# icin `podcast-models` hacmine `deploy/setup-local-engine.sh` ile kurulur.
+# PIPELINE_REPO yalnizca lokal motorun SOZLESME testleri (regress_format_*) icin
+# checkout edilir. Her durumda imaj DERLENIR, artefakt yuklenir ve deploy kosar.
 #
 # Validate ile Build and test paralel kosar; Deploy ikisi de yesilse calisir.
 # Yeni bir push ayni ref'teki Validate/Build'i iptal eder; ucustaki Deploy'u
@@ -151,12 +151,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f vendor/pipeline/script/plan.py ]; then
-            echo "hat kaynagi VAR - lokal motor testleri ve lokal bagimliliklar kosacak"
+            echo "hat kaynagi VAR - lokal motor sozlesme testleri kosacak"
             {
               echo "### Hat kaynagi hazir"
               echo ""
-              echo "`vendor/pipeline` checkout edildi: format sozlesmesi testleri ve lokal motor bagimliliklari kosar."
-              echo "Varsayilan calisma moturu (\`api\`) bundan bagimsizdir; imaj ve deploy her durumda kosar."
+              echo "`vendor/pipeline` checkout edildi: format sozlesmesi testleri kosar (imaja GIRMEZ)."
+              echo "Lokal motorun agir bagimliliklari hacme kurulur: `bash deploy/setup-local-engine.sh`."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -189,12 +189,13 @@ jobs:
 
       # Degisken ayarliysa eksik parca sunucuda degil BURADA patlamali:
       # derinlerde anlamsiz bir COPY hatasi yerine nedeni soyle.
-      - name: Hat kaynagi imaj icin zorunlu
+      - name: Hat kaynagi lokal motor testleri icin zorunlu
         if: vars.PIPELINE_REPO != ''
         run: |
           set -euo pipefail
           if [ ! -f vendor/pipeline/router/hat.py ]; then
-            echo "vendor/pipeline/router/hat.py yok; Containerfile onu imaja kopyalar, yani imaj derlenemez." >&2
+            echo "vendor/pipeline/router/hat.py yok; lokal motorun format sozlesmesi testleri kosamaz." >&2
+            echo "IMaj bundan ETKILENMEZ (hat agaci imaja girmez); yalnizca test kapisi eksik kalir." >&2
             echo "CI: depo degiskeni PIPELINE_REPO (+ ozel depo ise PIPELINE_TOKEN sirri) ayarlanmali." >&2
             echo "Yerelde: pwsh -File deploy/setup-pipeline.ps1" >&2
             exit 1
@@ -277,12 +278,15 @@ jobs:
           mkdir -p stage
           docker save localhost/hezarfen-podcast:$GITHUB_SHA | gzip > stage/hezarfen_text_to_podcast.tar.gz
           cp compose.yaml deploy/hezarfen_text_to_podcast_compose.service stage/
+          cp deploy/setup-local-engine.sh requirements-local.txt stage/
           echo -n "$GITHUB_SHA" > stage/tag
           # Sunucuda kurulacak her sey burada olmali; eksik parca burada,
           # sunucuda degil, patlar.
           test -f stage/hezarfen_text_to_podcast.tar.gz
           test -f stage/compose.yaml
           test -f stage/hezarfen_text_to_podcast_compose.service
+          test -f stage/setup-local-engine.sh
+          test -f stage/requirements-local.txt
           test -f stage/tag
           ls -lh stage
 
@@ -365,6 +369,8 @@ jobs:
           test -f stage/hezarfen_text_to_podcast.tar.gz
           test -f stage/compose.yaml
           test -f stage/hezarfen_text_to_podcast_compose.service
+          test -f stage/setup-local-engine.sh
+          test -f stage/requirements-local.txt
           test -f stage/tag
 
       - name: Install SSH keys
@@ -397,7 +403,7 @@ jobs:
           # stdin paketi tasiyor, betik tasiyamaz; cikarma yine bash -c ile
           # cunku login shell bash degil ve $HOME'u genisletmez. Sunucuya yalniz
           # dort deploy dosyasi kurulur.
-          tar -C stage -czf - hezarfen_text_to_podcast.tar.gz compose.yaml hezarfen_text_to_podcast_compose.service tag | ssh "$ssh_target" "bash -c 'exec tar -xzf - -C \"\$HOME/\$1\"' -- '$DEPLOY_SUBDIR'"
+          tar -C stage -czf - hezarfen_text_to_podcast.tar.gz compose.yaml hezarfen_text_to_podcast_compose.service setup-local-engine.sh requirements-local.txt tag | ssh "$ssh_target" "bash -c 'exec tar -xzf - -C \"\$HOME/\$1\"' -- '$DEPLOY_SUBDIR'"
 
       - name: Load the image and restart the service
         run: |

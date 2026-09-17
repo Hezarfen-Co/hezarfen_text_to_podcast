@@ -564,7 +564,7 @@ Elle: `podman exec hezarfen_text_to_podcast python -m src.main --health`
 | ASR `cuda` hatası | Yok — `ses/dogrula.py:352` CUDA yoksa **`cpu/int8`e düşer** ve bunu raporlar. Container'da beklenen davranış budur, hata değil. |
 | Konteyner `unhealthy` ama loglar temiz | `podman logs` içinde `kayit basarili` yoksa köprü backend'e bağlanamıyor: token uyuşmuyor ya da backend ayakta değil. |
 | `EACCES` — `/data/podcast/...` | Hacim root sahipliğinde oluşmuş. `podman volume rm podcast-jobs` (durum kaybolur) veya `podman unshare chown -R 10001:10001 ...`. |
-| İmaj build'i 20 dk sürüyor | Normal: torch + easyocr. `KUR_AGIR=0` ile ~2 GB ve dakikalar kısalır (OCR, e5 gömme ve VITS yedek motoru kapanır). |
+| İmaj build'i hızlı ve KÜÇÜK olur (varsayılan motor `api`) | torch/easyocr imaja HİÇ girmez; lokal motorun bağımlılıkları `podcast-models` hacmine `bash deploy/setup-local-engine.sh` ile kurulur. |
 | `unable to retrieve auth token ... unauthorized` | docker.io anonim-pull dalgalanması. `run-stack.ps1` pre-pull yapar; tekrar koştur. |
 
 ---
@@ -680,7 +680,7 @@ backend restart'ından sonra bir daha bağlanamaz, sessizce ölürdü.
   `PODCAST_RETENTION_DAYS` (compose'ta `30`, kod varsayilani `0`).
 * **easyocr ağırlıkları imajda yok**; ilk taranmış PDF'te kendi indirir
   (`podcast-easyocr` hacmine, kalıcı). Ağ gerekir.
-* **`torch` / `transformers` / `easyocr` tek bir ARG'a bağlıdır: `KUR_AGIR`
+* **`torch` / `transformers` / `easyocr` imaja HİÇ girmez: `PODCAST_LOCAL_VENV` hacminde durur (`bash deploy/setup-local-engine.sh`). Eski `KUR_AGIR` build arg'ı KALDIRILDI — imaj artık motora göre değişmez.
   (varsayılan `1`).** `transformers` hattın **hiçbir `requirements*.txt`inde
   yazılı değil** — `requirements-ses.txt` onu (ve `onnxruntime`, `numpy`,
   `huggingface_hub`'ı) "zaten kurulu" varsayıyor; bu boşluk Containerfile'da
@@ -688,4 +688,4 @@ backend restart'ından sonra bir daha bağlanamaz, sessizce ölürdü.
   `numpy==2.2.6`, `huggingface_hub==1.27.0` — yereldeki ölçülen sürümler).
   `torch` **sürüm pinlenmedi**: CPU tekerlek indeksinde py3.10 için hangi
   sürümün duracağı doğrulanamadı, bu yüzden çözücüye bırakıldı.
-  `KUR_AGIR=0` ile OCR, e5 gömme ve VITS yedek motoru kapanır.
+  Hacim boşsa lokal motor açılışta isimli bir hatayla ve kurulum komutuyla reddeder.

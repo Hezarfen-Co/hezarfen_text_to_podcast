@@ -1285,10 +1285,12 @@ def validate() -> int:
     elif settings.mode == pipeline.MODE_REAL:
         try:
             source_root = pipeline.check_pipeline_path(settings.pipeline_path)
+            venv_root = pipeline.check_local_venv(settings.local_venv)
         except pipeline.PipelineUnavailable as exc:
             print(f"[bridge] PODCAST_MODE=real ama hat kaynagi yok: {exc}", flush=True)
             return 2
         print(f"[bridge] gercek hat kaynagi: {source_root}", flush=True)
+        print(f"[bridge] lokal motor venv: {venv_root}", flush=True)
     else:
         print(f"[bridge] uyari: {pipeline.FAKE_WARNING}", flush=True)
 
@@ -1358,7 +1360,7 @@ def health() -> int:
     elif settings.mode == pipeline.MODE_REAL:
         try:
             source_root = pipeline.check_pipeline_path(settings.pipeline_path)
-            pipeline.load_pipeline(settings.pipeline_path)
+            pipeline.load_pipeline(settings.pipeline_path, settings.local_venv)
             notes.append(f"hat iceri alindi: {source_root}")
         except pipeline.PipelineUnavailable as exc:
             problems.append(f"hat yuklenemedi: {exc}")

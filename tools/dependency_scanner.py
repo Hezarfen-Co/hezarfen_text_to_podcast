@@ -27,9 +27,9 @@ DELIBERATELY_ABSENT = {
 
 CONTAINERFILE_INSTALLED = {
     "onnxruntime": "Containerfile pip adimi: onnxruntime==1.23.2 (ACIKCA kurulur)",
-    "transformers": "Containerfile KUR_AGIR blogu: pip install transformers==5.15.0",
-    "torch": "Containerfile KUR_AGIR blogu: pip install torch torchvision (CPU tekerlegi)",
-    "torchvision": "Containerfile KUR_AGIR blogu: torch ile birlikte",
+    "transformers": "lokal motor hacmi: requirements-local.txt (deploy/setup-local-engine.sh)",
+    "torch": "lokal motor hacmi: requirements-local.txt torch/torchvision (CPU tekerlegi)",
+    "torchvision": "lokal motor hacmi: requirements-local.txt (torch ile birlikte)",
 }
 
 

@@ -7,9 +7,7 @@ __pycache__/
 .agents
 .env
 out/
-vendor/*
-!vendor/pipeline/
+vendor/
 .coverage.*
 htmlcov/
 
-!vendor/pipeline/.gitkeep

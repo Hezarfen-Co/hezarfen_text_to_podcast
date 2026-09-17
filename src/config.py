@@ -140,6 +140,7 @@ class Config:
             "ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128"
         )
         self.elevenlabs_timeout_secs = env_float("ELEVENLABS_TIMEOUT_S", 120.0, 5.0, 900.0)
+        self.local_venv = _absolute(env_str("PODCAST_LOCAL_VENV", "/models/local-venv"))
         self.has_llm_key = bool(os.environ.get(LLM_KEY_ENV_NAME, "").strip())
         self.has_elevenlabs_key = bool(os.environ.get(ELEVENLABS_KEY_ENV_NAME, "").strip())
         if self.tls_fingerprint and not (
@@ -176,7 +177,8 @@ class Config:
             f"{'tanimli' if self.has_llm_key else 'TANIMSIZ'} "
             f"bulut_tts={self.elevenlabs_model} bulut_ses="
             f"{'tanimli' if self.elevenlabs_voice_id else 'TANIMSIZ'} "
-            f"bulut_anahtari={'tanimli' if self.has_elevenlabs_key else 'TANIMSIZ'}"
+            f"bulut_anahtari={'tanimli' if self.has_elevenlabs_key else 'TANIMSIZ'} "
+            f"yerel_venv={self.local_venv}"
         )
 
 

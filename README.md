@@ -420,7 +420,18 @@ Gerçek işi iki motordan biri koşar; seçim **yalnızca `.env`** iledir:
 | --- | --- | --- |
 | Ne koşar | Yerli hat: PyMuPDF metin çıkarma (+ gerekirse tesseract OCR) → script (OpenAI-uyumlu LLM; `duz_okuma` LLM'siz) → ElevenLabs HTTP TTS → ffmpeg mux | `router.hat.Hat` (vendored ağaç) |
 | Ağaç gerekir mi | **hayır** (`vendor/pipeline` olmadan imaj derlenir ve koşar) | **evet**; yoksa `real` modda açılış exit 2 |
-| Anahtarlar | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (her iş için), `LLM_API_KEY` (yalnız LLM formatları) | `PODCAST_TTS_ENGINE` + `SES_BULUT_IZINLI`; ağırlık hacmi (~3,9 GB) |
+| Bağımlılıklar | imajda (yalnız `pymupdf` + tesseract) | `PODCAST_LOCAL_VENV` hacmi; ağır bağımlılıklar (torch/transformers/easyocr) imaja **GİRMEZ**, `bash deploy/setup-local-engine.sh` ile hacme kurulur |
+| Anahtarlar | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (her iş için), `LLM_API_KEY` (yalnız LLM formatları) | `PODCAST_TTS_ENGINE` + `SES_BULUT_IZINLI`; ağırlıklar `/models/ses_modelleri` altında |
+
+Motor seçimi **yalnızca `.env` + restart** ile değişir: imaj ve workflow aynı
+kalır (imajda motor argümanı YOKTUR; `podman run`/compose aynı digest'i kullanır).
+
+**Dürüst sınır:** `local` motorun kendi kaynağı — vendored `router/hat.py` ağacı —
+**artık hiçbir repoda yok** (eski kopya `C:\PROJECTS\podcast` ile kayboldu).
+Yani `local` yapısal olarak duruyor ve seçilebiliyor, ama bugün **koşulamaz**;
+`PODCAST_PIPELINE_PATH` gerçek bir ağacı göstermedikçe açılış `exit 2` verir.
+`deploy/setup-local-engine.sh` yalnızca bağımlılıkları/аğırlıkları kurar, kaynağı
+getirmez.
 | Aşamalar | `kaynak → metin → script → tts → mux` | `ingest → scriptler → quiz → ses` |
 | ETA (otomatik) | 300 sn | 2700 sn |
 

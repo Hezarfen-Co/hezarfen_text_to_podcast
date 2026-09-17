@@ -1,0 +1,7 @@
+onnxruntime==1.23.2
+numpy==2.2.6
+huggingface_hub==1.27.0
+transformers==5.15.0
+easyocr==1.7.2
+torch
+torchvision

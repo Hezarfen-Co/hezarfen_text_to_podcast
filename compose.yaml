@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-      args:
-        KUR_AGIR: ${KUR_AGIR:-1}
     # HEZARFEN_TAG deploy tarafindan yazilan stack.env'den gelir (--env-file);
     # laptopta/Windows'ta run-stack.ps1 `:current` isaretini kullanir, yani
     # env dosyasi yokken davranis eskisi gibi kalir.
@@ -45,6 +43,9 @@ services:
       # calisma aninda acik hata ile reddeder).
       PODCAST_ENGINE: ${PODCAST_ENGINE:-api}
       PODCAST_PIPELINE_PATH: ${PODCAST_PIPELINE_PATH:-/app/pipeline}
+      # Yalnizca `local` motor: agir bagimliliklar imaja GIRMEZ, bu hacimde
+      # durur. Kurulum imaj degistirmeden: bash deploy/setup-local-engine.sh
+      PODCAST_LOCAL_VENV: ${PODCAST_LOCAL_VENV:-/models/local-venv}
       PODCAST_OUTPUT_ROOT: /data/podcast/out
       PODCAST_LEDGER_DB: /data/podcast/kayit/router.sqlite
       PODCAST_CHAPTER_LIMIT: "1"
