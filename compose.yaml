@@ -34,7 +34,18 @@ services:
       PODCAST_OUTPUT_ROOT: /data/podcast/out
       PODCAST_LEDGER_DB: /data/podcast/kayit/router.sqlite
       PODCAST_CHAPTER_LIMIT: "1"
-      PODCAST_TTS_ENGINE: supertonic-3
+      # Lokal motor varsayilan. ElevenLabs'e gecmek icin .env'de:
+      #   PODCAST_TTS_ENGINE=elevenlabs-flash-tr
+      #   SES_BULUT_IZINLI=1
+      #   ELEVENLABS_API_KEY=...
+      PODCAST_TTS_ENGINE: ${PODCAST_TTS_ENGINE:-supertonic-3}
+      # Bulut TTS kapisi. Varsayilan KAPALI; acik degilse ElevenLabs motoru
+      # cagrildiginda BulutYasak firlatir, sessizce lokale DUSMEZ.
+      SES_BULUT_IZINLI: ${SES_BULUT_IZINLI:-0}
+      # Anahtar interpolasyonla gelir; compose'a literal sir YAZILMAZ.
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      # Bos ise adaptordeki hazir ses kullanilir.
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
       HF_HOME: /models/hf
       TORCH_HOME: /models/torch
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
