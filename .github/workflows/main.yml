@@ -333,8 +333,8 @@ jobs:
         run: |
           set -euo pipefail
           run_id=""
-          for rid in $(gh run list --workflow main.yml --branch main --event push --limit 15 --json databaseId --jq '.[].databaseId'); do
-            if [ "$(gh run view "$rid" --json jobs --jq '.jobs[] | select(.name=="Build and test") | .conclusion')" = "success" ]; then
+          for rid in $(gh run list -R "$GITHUB_REPOSITORY" --workflow main.yml --branch main --event push --limit 15 --json databaseId --jq '.[].databaseId'); do
+            if [ "$(gh run view -R "$GITHUB_REPOSITORY" "$rid" --json jobs --jq '.jobs[] | select(.name=="Build and test") | .conclusion')" = "success" ]; then
               run_id=$rid
               break
             fi
