@@ -137,11 +137,14 @@ CATEGORY_SCALARS = {
 }
 
 SEED_FRAMES = [
-    {"id": "01SEED", "capability": "podcast.submit",
+    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.submit",
      "payload": {"file_id": "01FILE", "format": "duz_okuma"}, "deadline_ms": 30000},
-    {"id": "01SEED", "capability": "podcast.status", "payload": {"job_id": "01JOB"}},
-    {"id": "01SEED", "capability": "podcast.result", "payload": {"job_id": "01JOB"}},
-    {"id": "01SEED", "capability": "podcast.cancel", "payload": {"job_id": "01JOB"}},
+    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.status",
+     "payload": {"job_id": "01JOB"}},
+    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.result",
+     "payload": {"job_id": "01JOB"}},
+    {"id": "01SEED", "school": "01OKUL", "capability": "podcast.cancel",
+     "payload": {"job_id": "01JOB"}},
 ]
 
 SEED_GREETINGS = [
@@ -150,8 +153,10 @@ SEED_GREETINGS = [
 ]
 
 SEED_API = [
-    {"outcome": "ok", "id": "r1", "status": 200, "body": {"role": "student"}},
-    {"outcome": "err", "id": "r1", "code": "path_not_allowed", "message": "x"},
+    {"outcome": "ok", "id": "r1", "school": "01OKUL", "status": 200,
+     "body": {"role": "student"}},
+    {"outcome": "err", "id": "r1", "school": "01OKUL", "code": "path_not_allowed",
+     "message": "x"},
 ]
 
 GRAMMAR = {
@@ -339,7 +344,7 @@ def fuzz(cases: int, seed: int, verbose: bool) -> Report:
     for name, values in CATEGORY_STRINGS.items():
         every = list(values) + list(CATEGORY_SCALARS.get(name, []))
         for value in every:
-            for field in ("id", "capability", "payload", "deadline_ms"):
+            for field in ("id", "school", "capability", "payload", "deadline_ms"):
                 frame = dict(SEED_FRAMES[0])
                 frame[field] = value
                 probe(report, "parse_request", name, frame,
@@ -349,7 +354,7 @@ def fuzz(cases: int, seed: int, verbose: bool) -> Report:
                 greeting[field] = value
                 probe(report, "parse_greeting", name, greeting,
                       lambda g=greeting: protocol.parse_greeting(g), ALLOWED_GREETING, tracer)
-            for field in ("outcome", "id", "status", "body", "code"):
+            for field in ("outcome", "id", "school", "status", "body", "code"):
                 answer = dict(SEED_API[0])
                 answer[field] = value
                 probe(report, "parse_api_response", name, answer,
@@ -359,12 +364,13 @@ def fuzz(cases: int, seed: int, verbose: bool) -> Report:
                   (protocol.CapabilityError, ValueError), tracer)
             probe(report, "build_api_request", name, value,
                   lambda v=value: protocol.build_api_request(
-                      "r", v if isinstance(v, str) else "/notes"),
+                      "r", "01OKUL", v if isinstance(v, str) else "/notes"),
                   (protocol.ApiRefused, ValueError), tracer)
             for capability in capabilities.names():
                 body = {"job_id": value, "file_id": value, "format": value}
                 probe(report, "dispatch", name, (capability, body),
-                      lambda c=capability, b=body: capabilities.dispatch(c, b),
+                      lambda c=capability, b=body:
+                      capabilities.dispatch(c, "01OKUL", b),
                       ALLOWED_DISPATCH, tracer)
 
     for index in range(cases):

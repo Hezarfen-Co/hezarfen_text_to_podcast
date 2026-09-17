@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
+import random
 import ssl
 import sys
 import urllib.error
@@ -67,11 +71,13 @@ class BridgeProtocol(QuicConnectionProtocol):
         jobs.write_status(self._settings.job_root, True, worker_id)
         config.log(
             "info",
-            f"kayit basarili: worker_id={worker_id} yetenekler={','.join(capabilities.names())}",
+            f"kayit basarili: worker_id={worker_id} protokol={protocol.PROTOCOL} "
+            f"yetenekler={','.join(capabilities.names())}",
         )
 
     async def api_get(
         self,
+        school: str,
         path: str,
         query: str | None = None,
         on_behalf_of: str | None = None,
@@ -81,7 +87,7 @@ class BridgeProtocol(QuicConnectionProtocol):
         stream = protocol.FrameStream()
         self._streams[sid] = stream
         request = protocol.build_api_request(
-            jobs.new_job_id(), path, query, on_behalf_of
+            jobs.new_job_id(), school, path, query, on_behalf_of
         )
         try:
             self._send_frame(sid, request, end=True)
@@ -91,7 +97,7 @@ class BridgeProtocol(QuicConnectionProtocol):
         response = protocol.parse_api_response(frame)
         config.log(
             "debug",
-            f"api {path} -> status={response.status} "
+            f"api {path} -> status={response.status} okul={school} "
             f"kim={on_behalf_of or 'servis(ai rolu)'}",
         )
         return response
@@ -102,11 +108,15 @@ class BridgeProtocol(QuicConnectionProtocol):
 
     async def _serve_request(self, sid: int, stream: protocol.FrameStream) -> None:
         request_id = ""
+        school = ""
         try:
             frame = await stream.read_frame()
-            if isinstance(frame, dict) and isinstance(frame.get("id"), str):
-                request_id = frame["id"]
-            request_id, capability, payload, timeout = protocol.parse_request(frame)
+            if isinstance(frame, dict):
+                if isinstance(frame.get("id"), str):
+                    request_id = frame["id"]
+                if isinstance(frame.get("school"), str):
+                    school = frame["school"]
+            request_id, school, capability, payload, timeout = protocol.parse_request(frame)
         except EOFError as exc:
             config.log("warn", f"istek {sid} okunamadi: {exc}")
             self._streams.pop(sid, None)
@@ -114,30 +124,36 @@ class BridgeProtocol(QuicConnectionProtocol):
         except (CapabilityError, ValueError) as exc:
             code = getattr(exc, "code", "bad_request")
             config.log("warn", f"istek {sid} ayristirilamadi: {exc}")
-            self._finish(sid, request_id, protocol.err_response(request_id, code, str(exc)))
+            self._finish(
+                sid, request_id, protocol.err_response(request_id, school, code, str(exc))
+            )
             return
 
         if self._inflight >= self._settings.max_concurrent:
             response = protocol.err_response(
-                request_id, "busy", "worker es zamanli istek sinirinda"
+                request_id, school, "busy", "worker es zamanli istek sinirinda"
             )
             self._finish(sid, request_id, response)
             return
 
         self._inflight += 1
         try:
-            config.log("debug", f"istek {request_id} yetenek={capability}")
-            result = await asyncio.wait_for(self._handle(capability, payload), timeout=timeout)
-            response = protocol.ok_response(request_id, result)
+            config.log("debug", f"istek {request_id} yetenek={capability} okul={school}")
+            result = await asyncio.wait_for(
+                self._handle(capability, school, payload), timeout=timeout
+            )
+            response = protocol.ok_response(request_id, school, result)
         except CapabilityError as exc:
-            response = protocol.err_response(request_id, exc.code, str(exc))
+            response = protocol.err_response(request_id, school, exc.code, str(exc))
         except asyncio.TimeoutError:
             response = protocol.err_response(
-                request_id, "timed_out", "istek sure icinde tamamlanamadi"
+                request_id, school, "timed_out", "istek sure icinde tamamlanamadi"
             )
         except Exception as exc:
             config.log("error", f"istek {request_id} islenemedi: {exc}")
-            response = protocol.err_response(request_id, "internal", "beklenmeyen hata")
+            response = protocol.err_response(
+                request_id, school, "internal", "beklenmeyen hata"
+            )
         finally:
             self._inflight -= 1
 
@@ -151,7 +167,12 @@ class BridgeProtocol(QuicConnectionProtocol):
             try:
                 self._send_frame(
                     sid,
-                    protocol.err_response(request_id, "frame_too_large", str(exc)),
+                    protocol.err_response(
+                        request_id,
+                        str(response.get("school", "")),
+                        "frame_too_large",
+                        str(exc),
+                    ),
                     end=True,
                 )
             except Exception as inner:
@@ -161,9 +182,13 @@ class BridgeProtocol(QuicConnectionProtocol):
         finally:
             self._streams.pop(sid, None)
 
-    async def _handle(self, capability: str, payload: Any) -> dict[str, Any]:
+    async def _handle(
+        self, capability: str, school: str, payload: Any
+    ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, capabilities.dispatch, capability, payload)
+        return await loop.run_in_executor(
+            None, capabilities.dispatch, capability, school, payload
+        )
 
     async def keepalive(self) -> None:
         while True:
@@ -176,15 +201,47 @@ class BridgeProtocol(QuicConnectionProtocol):
                 return
 
 
-def fetch_certificate(backend_url: str) -> str:
+def _leaf_der_from_pem(pem: str) -> bytes:
+    begin = "-----BEGIN CERTIFICATE-----"
+    end = "-----END CERTIFICATE-----"
+    start = pem.find(begin)
+    stop = pem.find(end, start + 1) if start >= 0 else -1
+    if start < 0 or stop < 0:
+        raise RuntimeError("sertifika PEM govdesi bulunamadi")
+    body = pem[start + len(begin) : stop]
+    try:
+        return base64.b64decode("".join(body.split()))
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError(f"sertifika PEM govdesi base64 degil: {exc}") from exc
+
+
+def fetch_certificate(backend_url: str, expected_fingerprint: str = "") -> str:
     url = f"{backend_url}{protocol.CERTIFICATE_PATH}"
     with urllib.request.urlopen(url, timeout=CERT_FETCH_TIMEOUT_SECS) as resp:
         data = json.loads(resp.read())
     pem = data.get("certificate_pem")
     if not pem:
         raise RuntimeError(f"{url} beklenen certificate_pem alanini dondurmedi")
-    fingerprint = str(data.get("fingerprint_sha256", "?"))[:12]
-    config.log("info", f"sertifika alindi (fingerprint {fingerprint})")
+    computed = hashlib.sha256(_leaf_der_from_pem(pem)).hexdigest()
+    reported = str(data.get("fingerprint_sha256", "")).strip().lower().replace(":", "")
+    if reported and reported != computed:
+        raise RuntimeError(
+            "sertifika tutarsiz: bildirilen parmak izi PEM'den hesaplananla uyusmuyor "
+            f"(bildirilen {reported[:12]}, hesaplanan {computed[:12]})"
+        )
+    if expected_fingerprint:
+        if computed != expected_fingerprint:
+            raise RuntimeError(
+                "sertifika parmak izi PINLENEN degerle uyusmuyor; baglanilmiyor "
+                f"(beklenen {expected_fingerprint[:12]}, gelen {computed[:12]})"
+            )
+        config.log("info", f"sertifika alindi ve PINLENDI (fingerprint {computed[:12]})")
+    else:
+        config.log(
+            "warn",
+            f"sertifika alindi (fingerprint {computed[:12]}) -- AI_TLS_FINGERPRINT "
+            "tanimsiz, TOFU ile guveniliyor; uretimde parmak izini pinleyin",
+        )
     return pem
 
 
@@ -198,7 +255,7 @@ def build_quic_configuration(settings: config.Config, cert_pem: str) -> QuicConf
 
 
 async def run_once(settings: config.Config) -> None:
-    cert_pem = fetch_certificate(settings.backend_url)
+    cert_pem = fetch_certificate(settings.backend_url, settings.tls_fingerprint)
     quic_config = build_quic_configuration(settings, cert_pem)
     config.log(
         "info",
@@ -222,25 +279,42 @@ async def run_once(settings: config.Config) -> None:
     config.log("info", "baglanti kapandi")
 
 
+def next_backoff(current: float, settings: config.Config) -> float:
+    return min(current * 2.0, settings.reconnect_max_secs)
+
+
 async def run_forever(settings: config.Config) -> int:
     config.log("info", f"podcast koprusu basliyor: {settings.summary()}")
     jobs.write_status(settings.job_root, False)
+    backoff = settings.reconnect_secs
     while True:
         try:
             await run_once(settings)
+            backoff = settings.reconnect_secs
+        except asyncio.TimeoutError:
+            config.log("warn", "el sikisma zaman asimina ugradi")
+            backoff = next_backoff(backoff, settings)
         except (urllib.error.URLError, ConnectionError, OSError) as exc:
             config.log("warn", f"backend'e ulasilamadi: {exc}")
+            backoff = next_backoff(backoff, settings)
         except protocol.HandshakeRejected as exc:
-            config.log("error", str(exc))
-            if exc.code in ("unauthorized", "unsupported_protocol"):
-                jobs.write_status(settings.job_root, False)
-                config.log("error", "yapilandirma degismeden yeniden denenmeyecek")
-                return 2
+            if exc.permanent:
+                config.log(
+                    "error",
+                    f"{exc} -- yapilandirma degismeden duzelmez; yine de cikmiyoruz, "
+                    "geri cekilerek yeniden denenecek",
+                )
+                backoff = settings.reconnect_max_secs
+            else:
+                config.log("error", str(exc))
+                backoff = next_backoff(backoff, settings)
         except Exception as exc:
             config.log("error", f"baglanti hatasi: {exc}")
+            backoff = next_backoff(backoff, settings)
         jobs.write_status(settings.job_root, False)
-        config.log("info", f"{settings.reconnect_secs}s sonra yeniden denenecek")
-        await asyncio.sleep(settings.reconnect_secs)
+        delay = backoff + random.uniform(0.0, min(backoff, 5.0))
+        config.log("info", f"{delay:.1f}s sonra yeniden denenecek")
+        await asyncio.sleep(delay)
 
 
 def build_store(

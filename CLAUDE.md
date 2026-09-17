@@ -15,6 +15,20 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
   NAT ardında yaşayabilsin ve backend tek otorite kalsın diye.
 - **Sertifikayı her reconnect'te yeniden çek.** Backend self-signed sertifikayı her
   açılışta üretir; sadece redial etmek eski PEM'e güvenmek olur.
+- **Sertifika `AI_TLS_FINGERPRINT` ile pinlenebilir.** Doluysa PEM'den DER
+  çıkarılıp SHA-256'sı kendimiz hesaplanır ve pinlenen değerle karşılaştırılır;
+  tutmazsa bağlanılmaz, loglanır, geri çekilerek yeniden denenir. Boşsa TOFU'dur
+  ve her açılışta uyarı loglanır. Sunucunun bildirdiği iz pin yerine geçmez.
+- **Sürüm kimliği `hab/2`.** Backend hem ALPN'de hem `Hello.protocol` alanında
+  denetler; ikisi de `src/protocol.py` içindeki tek sabitten gelir.
+- **Her `Response` okulu yankılar.** Filo tüm okullara ortak olduğu için `Hello`
+  okul taşımaz; her istek çerçevesi okulunu slug ile adlandırır ve her cevap onu
+  aynen geri yazar. Okulsuz istek `bad_request`'tir; varsayılan yoktur. Aynı
+  kural `ApiRequest`/`ApiResponse` çifti için de geçerlidir.
+- **Kalıcı red (`unauthorized`, `unsupported_protocol`) servisi çıkarmaz.**
+  `restart: unless-stopped` altında exit 2 sonsuz crash-loop olurdu; bekleme
+  ikiye katlanır, jitter eklenir ve `AI_RECONNECT_MAX_SECS` tavanında durur,
+  backend düzelince servis kendiliğinden toparlanır.
 - **Kontrol akışı ömür boyu açık kalır** (`end_stream=False`). Kapanması backend
   için kayıttan düşme sinyalidir; heartbeat yok, QUIC PING (10 sn) var.
 - **Token loglanmaz, koda/belgeye yazılmaz.** Parmak izinin ilk 12 karakteri

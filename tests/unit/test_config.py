@@ -13,6 +13,8 @@ ENV_NAMES = (
     "AI_SERVICE_NAME",
     "AI_MAX_CONCURRENT",
     "AI_RECONNECT_SECS",
+    "AI_RECONNECT_MAX_SECS",
+    "AI_TLS_FINGERPRINT",
     "AI_SHARED_TOKEN",
     "PODCAST_JOB_ROOT",
     "PODCAST_WORKERS",
@@ -186,6 +188,8 @@ class ConfigDefaultsTests(EnvIsolatedTestCase):
         self.assertEqual(settings.tts_engine, "supertonic-3")
         self.assertFalse(settings.has_token)
         self.assertFalse(settings.has_llm_key)
+        self.assertEqual(settings.reconnect_max_secs, 120.0)
+        self.assertEqual(settings.tls_fingerprint, "")
 
     def test_backend_url_trailing_slash_is_trimmed(self) -> None:
         os.environ["AI_BACKEND_URL"] = "http://backend:8080/"
@@ -204,6 +208,46 @@ class ConfigDefaultsTests(EnvIsolatedTestCase):
             hasattr(settings, "llm_key"),
             "Config LLM anahtarinin degerini saklamamali, yalnizca varligini",
         )
+
+
+class TlsFingerprintTests(EnvIsolatedTestCase):
+    def test_default_is_empty_and_reported_as_tofu(self) -> None:
+        settings = config.Config(require_token=False)
+        self.assertEqual(settings.tls_fingerprint, "")
+        self.assertIn("TOFU", settings.summary())
+
+    def test_colons_spaces_and_case_are_normalized(self) -> None:
+        raw = "AB:cd" * 16
+        os.environ["AI_TLS_FINGERPRINT"] = "  " + raw + "  "
+        settings = config.Config(require_token=False)
+        self.assertEqual(settings.tls_fingerprint, raw.replace(":", "").lower())
+        self.assertEqual(len(settings.tls_fingerprint), 64)
+        self.assertIn("PINLI", settings.summary())
+
+    def test_a_pin_that_is_not_sha256_hex_crashes_the_boot(self) -> None:
+        for raw in ("kisa", "z" * 64, "a" * 63, "a" * 65):
+            with self.subTest(raw=raw[:12]):
+                os.environ["AI_TLS_FINGERPRINT"] = raw
+                with self.assertRaises(config.ConfigError):
+                    config.Config(require_token=False)
+
+    def test_the_pinned_value_itself_is_not_printed_in_the_summary(self) -> None:
+        pin = "a1b2c3d4" * 8
+        os.environ["AI_TLS_FINGERPRINT"] = pin
+        settings = config.Config(require_token=False)
+        self.assertNotIn(pin, settings.summary())
+        self.assertNotIn(pin[:12], settings.summary())
+
+
+class ReconnectCeilingTests(EnvIsolatedTestCase):
+    def test_the_ceiling_is_read_and_bounded_on_both_ends(self) -> None:
+        os.environ["AI_RECONNECT_MAX_SECS"] = "30"
+        self.assertEqual(config.Config(require_token=False).reconnect_max_secs, 30.0)
+        for raw in ("0", "0.5", "3601", "-5"):
+            with self.subTest(raw=raw):
+                os.environ["AI_RECONNECT_MAX_SECS"] = raw
+                with self.assertRaises(config.ConfigError):
+                    config.Config(require_token=False)
 
 
 class ModeGateTests(EnvIsolatedTestCase):

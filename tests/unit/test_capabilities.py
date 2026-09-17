@@ -25,7 +25,7 @@ class CapabilityTestCase(unittest.TestCase):
 
     def error_code(self, capability: str, payload: dict) -> str:
         with self.assertRaises(CapabilityError) as raised:
-            capabilities.dispatch(capability, payload)
+            capabilities.dispatch(capability, "okul-a", payload)
         return raised.exception.code
 
 
@@ -51,7 +51,7 @@ class RegistryTests(CapabilityTestCase):
 
     def test_none_payload_is_treated_as_empty_object(self) -> None:
         with self.assertRaises(CapabilityError) as raised:
-            capabilities.dispatch("podcast.submit", None)
+            capabilities.dispatch("podcast.submit", "okul-a", None)
         self.assertEqual(raised.exception.code, "bad_request")
 
 
@@ -91,7 +91,7 @@ class FormatDictionaryTests(CapabilityTestCase):
 
 class SubmitTests(CapabilityTestCase):
     def test_keyless_submit_returns_queued_job_with_positive_eta(self) -> None:
-        response = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})
+        response = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})
         self.assertEqual(response["state"], "queued")
         self.assertEqual(len(response["job_id"]), jobs.JOB_ID_LENGTH)
         self.assertIsInstance(response["eta_secs"], int)
@@ -123,14 +123,14 @@ class SubmitTests(CapabilityTestCase):
     def test_llm_unavailable_message_names_the_usable_formats(self) -> None:
         with self.assertRaises(CapabilityError) as raised:
             capabilities.dispatch(
-                "podcast.submit", {"source_id": "x", "format": "tek_ogretici"}
+                "podcast.submit", "okul-a", {"source_id": "x", "format": "tek_ogretici"}
             )
         self.assertIn(capabilities.DEFAULT_FORMAT, str(raised.exception))
 
     def test_llm_formats_are_accepted_once_the_key_is_ready(self) -> None:
         capabilities.configure(self.store, llm_ready=True)
         response = capabilities.dispatch(
-            "podcast.submit", {"source_id": "x", "format": "ogrenci_hoca"}
+            "podcast.submit", "okul-a", {"source_id": "x", "format": "ogrenci_hoca"}
         )
         self.assertEqual(response["state"], "queued")
 
@@ -138,7 +138,7 @@ class SubmitTests(CapabilityTestCase):
         small = jobs.JobStore(root=self.root / "dar", workers=1, max_jobs=1, stage_secs=0.0)
         capabilities.configure(small, llm_ready=False)
         try:
-            capabilities.dispatch("podcast.submit", {"source_id": "ilk"})
+            capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ilk"})
             self.assertEqual(self.error_code("podcast.submit", {"source_id": "ikinci"}), "busy")
         finally:
             small.shutdown(timeout=1.0)
@@ -150,15 +150,15 @@ class SubmitTests(CapabilityTestCase):
 
 class StatusResultCancelTests(CapabilityTestCase):
     def test_status_reports_queued_job_without_error_code(self) -> None:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "x"})["job_id"]
-        response = capabilities.dispatch("podcast.status", {"job_id": job_id})
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "x"})["job_id"]
+        response = capabilities.dispatch("podcast.status", "okul-a", {"job_id": job_id})
         self.assertEqual(response["state"], "queued")
         self.assertEqual(response["progress"], 0.0)
         self.assertIn("error_code", response)
         self.assertIsNone(response["error_code"])
 
     def test_result_before_completion_is_not_ready(self) -> None:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "x"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "x"})["job_id"]
         self.assertEqual(self.error_code("podcast.result", {"job_id": job_id}), "not_ready")
 
     def test_unknown_job_is_not_found_for_every_lookup_capability(self) -> None:
@@ -173,18 +173,18 @@ class StatusResultCancelTests(CapabilityTestCase):
                     self.assertEqual(self.error_code(name, payload), "bad_request")
 
     def test_cancel_of_queued_job_reports_true_then_false(self) -> None:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "x"})["job_id"]
-        self.assertTrue(capabilities.dispatch("podcast.cancel", {"job_id": job_id})["cancelled"])
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "x"})["job_id"]
+        self.assertTrue(capabilities.dispatch("podcast.cancel", "okul-a", {"job_id": job_id})["cancelled"])
         self.assertEqual(
-            capabilities.dispatch("podcast.status", {"job_id": job_id})["state"], "cancelled"
+            capabilities.dispatch("podcast.status", "okul-a", {"job_id": job_id})["state"], "cancelled"
         )
         self.assertFalse(
-            capabilities.dispatch("podcast.cancel", {"job_id": job_id})["cancelled"],
+            capabilities.dispatch("podcast.cancel", "okul-a", {"job_id": job_id})["cancelled"],
             "bitmis is icin ikinci iptal False donmeli",
         )
 
     def test_result_payload_carries_both_singular_and_plural_identifiers(self) -> None:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "x"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "x"})["job_id"]
         self.store.transition(job_id, jobs.STATE_RUNNING)
         self.store.finish(
             job_id,
@@ -194,7 +194,7 @@ class StatusResultCancelTests(CapabilityTestCase):
             audio_ids=["a/b.mp3", "a/c.mp3"],
             script_ids=["a/b.json", "a/c.json"],
         )
-        response = capabilities.dispatch("podcast.result", {"job_id": job_id})
+        response = capabilities.dispatch("podcast.result", "okul-a", {"job_id": job_id})
         self.assertEqual(response["audio_id"], "a/b.mp3")
         self.assertEqual(response["script_id"], "a/b.json")
         self.assertEqual(response["duration_secs"], 12.5)

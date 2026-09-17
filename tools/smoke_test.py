@@ -6,6 +6,7 @@ import sys
 import time
 
 DEFAULT_PIPELINE = r"C:\PROJECTS\podcast"
+SMOKE_SCHOOL = "yerel-denetim"
 DEFAULT_MEDIA = r"C:\PROJECTS\podcast\samples"
 DEFAULT_SOURCE = "kisa_slayt.pdf"
 
@@ -69,7 +70,7 @@ def main() -> int:
     capabilities.configure(store, bool(probe["llm_ready"]))
 
     submitted = capabilities.dispatch(
-        "podcast.submit", {"source_id": args.source, "format": args.format}
+        "podcast.submit", SMOKE_SCHOOL, {"source_id": args.source, "format": args.format}
     )
     job_id = submitted["job_id"]
     print(f"[smoke] is verildi: {job_id} eta={submitted['eta_secs']}s", flush=True)
@@ -90,7 +91,7 @@ def main() -> int:
             elapsed = time.monotonic() - began
             if args.cancel_after > 0 and not cancelled and elapsed >= args.cancel_after:
                 print(f"[smoke] {elapsed:.0f}s sonra iptal isteniyor", flush=True)
-                capabilities.dispatch("podcast.cancel", {"job_id": job_id})
+                capabilities.dispatch("podcast.cancel", SMOKE_SCHOOL, {"job_id": job_id})
                 cancelled = True
             if elapsed > args.timeout:
                 print(f"[smoke] zaman asimi {args.timeout}s", flush=True)
@@ -102,7 +103,7 @@ def main() -> int:
     record = store.get(job_id)
     print(f"[smoke] durum={record['state']} hata={record['error_code']}", flush=True)
     if record["state"] == jobs.STATE_DONE:
-        payload = capabilities.dispatch("podcast.result", {"job_id": job_id})
+        payload = capabilities.dispatch("podcast.result", SMOKE_SCHOOL, {"job_id": job_id})
         for key in ("audio_id", "script_id", "duration_secs", "audio_ids", "script_ids"):
             print(f"[smoke] {key} = {payload.get(key)}", flush=True)
         return 0

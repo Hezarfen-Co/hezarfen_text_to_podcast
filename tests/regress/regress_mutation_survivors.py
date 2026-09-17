@@ -104,7 +104,7 @@ class ComparisonsRejectTheWrongSide(unittest.TestCase):
     def test_a_welcome_with_a_different_protocol_is_rejected(self) -> None:
         with self.assertRaises(protocol.HandshakeRejected):
             protocol.parse_greeting(
-                {"type": "welcome", "worker_id": "w", "protocol": "hab/2"}
+                {"type": "welcome", "worker_id": "w", "protocol": "hab/1"}
             )
 
     def test_a_welcome_with_the_right_protocol_is_accepted(self) -> None:

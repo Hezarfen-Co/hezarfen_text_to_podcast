@@ -33,6 +33,15 @@ def _guard(label: str, call, *args) -> list[str]:
         return [f"{label} kontrolu beklenmedik sekilde patladi: {type(exc).__name__}: {exc}"]
 
 
+VALIDATE_SCHOOL = "denetim-okulu"
+
+
+def _dispatch(capability: str, payload: dict) -> dict:
+    from . import capabilities
+
+    return capabilities.dispatch(capability, VALIDATE_SCHOOL, payload)
+
+
 def _await_state(store, job_id: str, wanted: tuple[str, ...], deadline_secs: float):
     limit = time.monotonic() + deadline_secs
     while time.monotonic() < limit:
@@ -75,14 +84,14 @@ def _check_registry(root: str) -> list[str]:
     store = jobs.JobStore(root=os.path.join(root, "registry"), workers=1, max_jobs=8, stage_secs=0.0)
     capabilities.configure(store, llm_ready=False)
 
-    submitted = capabilities.dispatch("podcast.submit", {"source_id": "ornek"})
+    submitted = _dispatch("podcast.submit", {"source_id": "ornek"})
     job_id = str(submitted.get("job_id", ""))
     if submitted.get("state") != "queued" or len(job_id) != 26:
         problems.append(f"anahtarsiz duz_okuma submit'i kabul edilmedi: {submitted}")
     if not isinstance(submitted.get("eta_secs"), int) or submitted["eta_secs"] < 1:
         problems.append(f"eta_secs bir pozitif tamsayi degil: {submitted.get('eta_secs')}")
 
-    reported = capabilities.dispatch("podcast.status", {"job_id": job_id})
+    reported = _dispatch("podcast.status", {"job_id": job_id})
     if reported.get("state") != "queued" or reported.get("progress") != 0.0:
         problems.append(f"podcast.status kuyruktaki isi dogru bildirmedi: {reported}")
     if "error_code" not in reported or reported["error_code"] is not None:
@@ -92,23 +101,23 @@ def _check_registry(root: str) -> list[str]:
         problems,
         "bitmemis is icin podcast.result",
         "not_ready",
-        capabilities.dispatch,
+        _dispatch,
         "podcast.result",
         {"job_id": job_id},
     )
 
-    if capabilities.dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not True:
+    if _dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not True:
         problems.append("kuyruktaki is iptal edilemedi")
-    if capabilities.dispatch("podcast.status", {"job_id": job_id}).get("state") != "cancelled":
+    if _dispatch("podcast.status", {"job_id": job_id}).get("state") != "cancelled":
         problems.append("iptal sonrasi durum 'cancelled' olmadi")
-    if capabilities.dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not False:
+    if _dispatch("podcast.cancel", {"job_id": job_id}).get("cancelled") is not False:
         problems.append("bitmis is icin ikinci iptal True dondu")
 
     _expect_error(
         problems,
         "anahtarsiz tek_ogretici submit'i",
         "llm_unavailable",
-        capabilities.dispatch,
+        _dispatch,
         "podcast.submit",
         {"source_id": "ornek", "format": "tek_ogretici"},
     )
@@ -116,7 +125,7 @@ def _check_registry(root: str) -> list[str]:
         problems,
         "anahtarsiz ogrenci_hoca submit'i",
         "llm_unavailable",
-        capabilities.dispatch,
+        _dispatch,
         "podcast.submit",
         {"source_id": "ornek", "format": "ogrenci_hoca"},
     )
@@ -124,7 +133,7 @@ def _check_registry(root: str) -> list[str]:
     from .protocol import CapabilityError
 
     try:
-        capabilities.dispatch("podcast.submit", {"source_id": "ornek", "format": "tek_ogretici"})
+        _dispatch("podcast.submit", {"source_id": "ornek", "format": "tek_ogretici"})
     except CapabilityError as exc:
         if "duz_okuma" not in str(exc):
             problems.append("llm_unavailable mesaji kullanilabilir formatlari soylemiyor")
@@ -134,7 +143,7 @@ def _check_registry(root: str) -> list[str]:
             problems,
             f"{capability} bilinmeyen is icin",
             "not_found",
-            capabilities.dispatch,
+            _dispatch,
             capability,
             {"job_id": "YOKBOYLEBIRIS"},
         )
@@ -149,7 +158,7 @@ def _check_registry(root: str) -> list[str]:
             problems,
             f"{capability} gecersiz payload {payload}",
             "bad_request",
-            capabilities.dispatch,
+            _dispatch,
             capability,
             payload,
         )
@@ -158,13 +167,13 @@ def _check_registry(root: str) -> list[str]:
         problems,
         "bilinmeyen yetenek",
         "unsupported_capability",
-        capabilities.dispatch,
+        _dispatch,
         "podcast.bilinmeyen",
         {},
     )
 
     capabilities.configure(store, llm_ready=True)
-    with_key = capabilities.dispatch(
+    with_key = _dispatch(
         "podcast.submit", {"source_id": "ornek", "format": "tek_ogretici"}
     )
     if with_key.get("state") != "queued":
@@ -172,12 +181,12 @@ def _check_registry(root: str) -> list[str]:
 
     small = jobs.JobStore(root=os.path.join(root, "busy"), workers=1, max_jobs=1, stage_secs=0.0)
     capabilities.configure(small, llm_ready=False)
-    capabilities.dispatch("podcast.submit", {"source_id": "ilk"})
+    _dispatch("podcast.submit", {"source_id": "ilk"})
     _expect_error(
         problems,
         "kuyruk tavani asildiginda submit",
         "busy",
-        capabilities.dispatch,
+        _dispatch,
         "podcast.submit",
         {"source_id": "ikinci"},
     )
@@ -283,16 +292,16 @@ def _check_lifecycle(root: str) -> list[str]:
     done_store.start()
     capabilities.configure(done_store, llm_ready=False)
     try:
-        submitted = capabilities.dispatch("podcast.submit", {"source_id": "kaynak", "format": "duz_okuma"})
+        submitted = _dispatch("podcast.submit", {"source_id": "kaynak", "format": "duz_okuma"})
         job_id = submitted["job_id"]
         final = _await_state(done_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_DONE:
             problems.append(f"sahte hat 'done' ile bitmedi: {final['state']} {final['error_code']}")
         else:
-            reported = capabilities.dispatch("podcast.status", {"job_id": job_id})
+            reported = _dispatch("podcast.status", {"job_id": job_id})
             if reported.get("progress") != 1.0:
                 problems.append(f"biten isin ilerlemesi 1.0 degil: {reported.get('progress')}")
-            payload = capabilities.dispatch("podcast.result", {"job_id": job_id})
+            payload = _dispatch("podcast.result", {"job_id": job_id})
             if not payload.get("audio_id") or not payload.get("script_id"):
                 problems.append(f"podcast.result kimlikleri uretmedi: {payload}")
             if not isinstance(payload.get("duration_secs"), float):
@@ -308,13 +317,13 @@ def _check_lifecycle(root: str) -> list[str]:
     cancel_store.start()
     capabilities.configure(cancel_store, llm_ready=False)
     try:
-        submitted = capabilities.dispatch("podcast.submit", {"source_id": "kaynak"})
+        submitted = _dispatch("podcast.submit", {"source_id": "kaynak"})
         job_id = submitted["job_id"]
         started = _await_state(cancel_store, job_id, (jobs.STATE_RUNNING,), 10.0)
         if started["state"] != jobs.STATE_RUNNING:
             problems.append(f"is kosmaya baslamadi: {started['state']}")
         else:
-            capabilities.dispatch("podcast.cancel", {"job_id": job_id})
+            _dispatch("podcast.cancel", {"job_id": job_id})
             stopped = _await_state(
                 cancel_store,
                 job_id,
@@ -547,8 +556,10 @@ def _check_framing() -> list[str]:
         problems.append("cerceve gidis-donusu bozuldu")
     if protocol.encode_frame({})[:4] != b"\x00\x00\x00\x02":
         problems.append("uzunluk oneki big-endian degil")
-    if protocol.PROTOCOL != "hab/1":
+    if protocol.PROTOCOL != "hab/2":
         problems.append(f"protokol kimligi beklenenden farkli: {protocol.PROTOCOL}")
+    if message.get("protocol") != "hab/2":
+        problems.append(f"Hello cercevesi hab/2 bildirmiyor: {message.get('protocol')}")
 
     try:
         protocol.parse_greeting({"code": "unauthorized", "message": "bad token"})
@@ -564,9 +575,30 @@ def _check_framing() -> list[str]:
     except protocol.HandshakeRejected:
         pass
 
-    deadline = protocol.parse_request(
-        {"id": "r1", "capability": "podcast.status", "payload": {}, "deadline_ms": 60000}
-    )[3]
+    request = protocol.parse_request(
+        {
+            "id": "r1",
+            "school": "okul-a",
+            "capability": "podcast.status",
+            "payload": {},
+            "deadline_ms": 60000,
+        }
+    )
+    if request[1] != "okul-a":
+        problems.append(f"istek okulu okunmadi: {request[1]!r}")
+    if protocol.ok_response("r1", "okul-a", {})["school"] != "okul-a":
+        problems.append("ok cevabi okulu yankilamiyor")
+    if protocol.err_response("r1", "okul-a", "busy", "dolu")["school"] != "okul-a":
+        problems.append("err cevabi okulu yankilamiyor")
+    if protocol.build_api_request("r1", "okul-a", "/auth/me")["school"] != "okul-a":
+        problems.append("ApiRequest okulu tasimiyor")
+    try:
+        protocol.parse_request({"id": "r1", "capability": "podcast.status"})
+        problems.append("okulsuz istek kabul edildi")
+    except protocol.CapabilityError:
+        pass
+
+    deadline = request[4]
     if deadline is None or deadline >= 60.0:
         problems.append(f"deadline payi birakilmadi: {deadline}")
     return problems
@@ -809,7 +841,7 @@ def _check_pipeline(root: str) -> list[str]:
     ok_store.start()
     capabilities.configure(ok_store, llm_ready=False)
     try:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = _dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
         final = _await_state(ok_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_DONE:
             problems.append(
@@ -817,7 +849,7 @@ def _check_pipeline(root: str) -> list[str]:
                 f"{final['state']} {final['error_code']}"
             )
         else:
-            payload = capabilities.dispatch("podcast.result", {"job_id": job_id})
+            payload = _dispatch("podcast.result", {"job_id": job_id})
             if payload.get("audio_id") != "bolum-1.mp3":
                 problems.append(f"result audio_id yanlis: {payload.get('audio_id')}")
             if payload.get("script_id") != "bolum-1.txt":
@@ -835,7 +867,7 @@ def _check_pipeline(root: str) -> list[str]:
     quiet_store.start()
     capabilities.configure(quiet_store, llm_ready=False)
     try:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = _dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
         final = _await_state(quiet_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"mp3 uretilmeyen is 'failed' olmadi: {final['state']}")
@@ -850,7 +882,7 @@ def _check_pipeline(root: str) -> list[str]:
     missing_store.start()
     capabilities.configure(missing_store, llm_ready=False)
     try:
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "yok.pdf"})["job_id"]
+        job_id = _dispatch("podcast.submit", {"source_id": "yok.pdf"})["job_id"]
         final = _await_state(missing_store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         if final["state"] != jobs.STATE_FAILED:
             problems.append(f"kaynagi olmayan is 'failed' olmadi: {final['state']}")

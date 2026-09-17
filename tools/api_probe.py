@@ -12,6 +12,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Gercek backend'e ApiRequest atar (tani araci, uretim yolu DEGIL)"
     )
+    parser.add_argument("--school", required=True)
     parser.add_argument("--path", default="/auth/me")
     parser.add_argument("--query", default="")
     parser.add_argument("--on-behalf-of", default="")
@@ -29,7 +30,7 @@ async def run_probe(args) -> int:
     store = jobs.JobStore(root=settings.job_root, workers=1, max_jobs=2)
     capabilities.configure(store, settings.has_llm_key)
 
-    cert = bridge.fetch_certificate(settings.backend_url)
+    cert = bridge.fetch_certificate(settings.backend_url, settings.tls_fingerprint)
     quic_config = bridge.build_quic_configuration(settings, cert)
     create = partial(bridge.BridgeProtocol, settings=settings)
     async with connect(
@@ -39,11 +40,12 @@ async def run_probe(args) -> int:
         await connection.register()
         try:
             response = await connection.api_get(
-                args.path, args.query or None, args.on_behalf_of or None
+                args.school, args.path, args.query or None, args.on_behalf_of or None
             )
         except protocol.ApiRefused as exc:
             print(f"[api] KOPRU REDDETTI code={exc.code} :: {exc}", flush=True)
             return 1
+        print(f"[api] okul     = {args.school}", flush=True)
         print(f"[api] yol      = {args.path}", flush=True)
         print(f"[api] status   = {response.status}", flush=True)
         print(f"[api] basarili = {response.ok}", flush=True)

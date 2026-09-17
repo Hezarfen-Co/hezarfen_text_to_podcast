@@ -14,28 +14,50 @@ QUIC *sunucusudur*; bu servis ona **dışarıdan bağlanır** (dial-out), yetene
 kaydeder ve backend'in açtığı akışlardan iş alır. Rule-based chatbot ile birebir
 aynı konumlanma.
 
-## Protokol (`hab/1`)
+## Protokol (`hab/2`)
 
 Çerçeveleme: 4 bayt big-endian uzunluk + o kadar bayt JSON. Tavan 8 MiB.
 
 1. `GET {AI_BACKEND_URL}/ai/certificate` → dönen PEM QUIC güven deposuna
    **pinlenir**. Backend self-signed sertifikayı her açılışta yenileyebildiği için
    sertifika **her yeniden bağlanmada tekrar çekilir**; salt redial yanlıştır.
-2. QUIC bağlantısı, ALPN `hab/1`, idle timeout 30 sn.
+   `AI_TLS_FINGERPRINT` doluysa PEM'den DER çıkarılıp SHA-256'sı **kendimiz**
+   hesaplanır ve pinlenen değerle karşılaştırılır; tutmazsa bağlanılmaz, loglanır
+   ve geri çekilerek yeniden denenir. Boşsa bağlantı TOFU'dur ve bu **her
+   açılışta uyarı olarak loglanır** — sessiz bir varsayılan değil, bilinçli bir
+   taviz. Sunucunun bildirdiği `fingerprint_sha256` alanı pin yerine geçmez
+   (sertifikayı uyduran taraf yanındaki izi de uydurur); yalnızca loglanır ve
+   bizim hesabımızla çapraz denetlenir.
+2. QUIC bağlantısı, ALPN `hab/2`, idle timeout 30 sn. Sürüm kimliği iki yerde
+   birden denetlenir: ALPN pazarlığı ve `Hello.protocol` alanı.
 3. İlk client-initiated çift yönlü akış = **kontrol akışı**: tek `Hello` yazılır,
    tek `Greeting` okunur, akış ömür boyu açık tutulur (kapanması = kayıttan
    düşme). Heartbeat çerçevesi yok; 10 sn'de bir QUIC PING ile canlı tutulur.
 4. Her istek backend'in açtığı server-initiated akıştır (`stream_id % 4 == 1`):
    tek `Request` okunur, tek `Response` yazılır, akış biter.
 
-Cevaplar: `{"status":"ok","id":...,"payload":{...}}` veya
-`{"status":"err","id":...,"code":...,"message":...}`. Kullanılan kararlı kodlar:
-`unsupported_capability`, `bad_request`, `not_found`, `not_ready`,
+**Okul kapsamı:** filo tüm okullara ortaktır, bu yüzden `Hello` okul taşımaz;
+her `Request` kendi okulunu slug ile adlandırır ve her `Response` onu **aynen
+yankılar**. Okulsuz istek `bad_request` ile reddedilir — varsayılan ya da geri
+düşme yoktur, çünkü yanlış okulun verisinden cevaplanan bir okuma tam olarak bu
+alanın var olma sebebidir. Aynı kural servisin açtığı okuma akışında da geçerli:
+`ApiRequest` okulu taşır, `ApiResponse` onu yankılar.
+
+Cevaplar: `{"status":"ok","id":...,"school":...,"payload":{...}}` veya
+`{"status":"err","id":...,"school":...,"code":...,"message":...}`. Kullanılan
+kararlı kodlar: `unsupported_capability`, `bad_request`, `not_found`, `not_ready`,
 `llm_unavailable`, `frame_too_large`, `timed_out`, `busy`, `internal`.
+
+**Kalıcı red döngüyü bitirmez.** `unauthorized` ve `unsupported_protocol`
+yapılandırma değişmeden düzelmez; servis yine de **çıkmaz** (exit 2 yok). Çünkü
+`restart: unless-stopped` altında çıkmak sonsuz bir crash-loop olur ve backend
+düzeltildiğinde servis kendiliğinden toparlanmaz — operatörün elle müdahalesi
+gerekir. Bunun yerine bekleme ikiye katlanır, üzerine jitter eklenir ve
+`AI_RECONNECT_MAX_SECS` tavanında durur.
 
 ## Neden yetenek işleyicileri anında döner
 
-Backend'in her `hab/1` isteği için bir deadline'ı var ve **tavanı 60 saniyedir**
+Backend'in her `hab/2` isteği için bir deadline'ı var ve **tavanı 60 saniyedir**
 (`hezarfen_backend/src/constant.rs`, `AI_MAX_REQUEST_TIMEOUT_SECS`). Gerçek
 podcast üretimi ise **~45 dakika** sürer. Bu iki sayı aynı çağrının içine sığmaz.
 
@@ -425,7 +447,9 @@ değişmelidir.
 | `AI_TLS_SERVER_NAME` | `localhost` | Sertifikanın SAN'ı |
 | `AI_SERVICE_NAME` | `podcast` | Hello'daki servis adı |
 | `AI_MAX_CONCURRENT` | `2` | Aynı anda kabul edilen **istek**; aşılırsa `busy` |
-| `AI_RECONNECT_SECS` | `3` | Kopunca yeniden deneme aralığı |
+| `AI_RECONNECT_SECS` | `3` | Kopunca ilk yeniden deneme aralığı; her başarısız denemede ikiye katlanır |
+| `AI_RECONNECT_MAX_SECS` | `120` | Geri çekilmenin tavanı (jitter bu tavanın üstüne eklenir) |
+| `AI_TLS_FINGERPRINT` | boş | Pinlenen sertifika SHA-256'sı (hex; iki nokta ayraçları atılır). Boşsa TOFU ve uyarı loglanır |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `PODCAST_JOB_ROOT` | `/data/podcast/jobs` | İş durumu dizini (kalıcı hacim) |
 | `PODCAST_WORKERS` | `1` | Eş zamanlı **uzun iş** sayısı (ayrı havuz) |
@@ -570,7 +594,7 @@ Bu, rule-based chatbot deposundaki desenin birebir kopyasıdır ve bilinçlidir:
 testler standart kütüphaneden başka bir şey istemez, imajda ek bağımlılık yoktur.
 
 ```sh
-python -m unittest discover -s tests -t .      # tüm paket (298 test, ~9 sn)
+python -m unittest discover -s tests -t .      # tüm paket (321 test, ~9 sn)
 python -m unittest tests.unit.test_jobs        # tek dosya
 python -m unittest tests.regress.regress_cancel_race -v
 ```
@@ -591,9 +615,9 @@ bilinen bir kusuru geri getirdi mi" der.
 
 | Dizin | Ne sınar |
 | --- | --- |
-| `tests/unit/` | Tek modül davranışı: çerceveleme, ortam çözümleme, yetenek defteri, durum makinesi, çıktı eşlemesi (138 test) |
+| `tests/unit/` | Tek modül davranışı: çerceveleme, ortam çözümleme, yetenek defteri, durum makinesi, çıktı eşlemesi (160 test) |
 | `tests/integration/` | `submit -> status -> result` uçtan uca; sahte bir `Hat` sınıfı ile ama **gerçek** `JobStore`, gerçek işçi thread'leri, gerçek `capabilities.dispatch` (8 test) |
-| `tests/regress/` | Her dosya **ölçülerek bulunmuş bir kusur**; düzeltme geri alınırsa kırmızıya döner (17 dosya, 130 test) |
+| `tests/regress/` | Her dosya **ölçülerek bulunmuş bir kusur**; düzeltme geri alınırsa kırmızıya döner (17 dosya, 131 test) |
 | `tests/fuzz/` | Hatalı biçimlendirilmiş girdi altında ayrıştırıcı sözleşmesi: altı slayt kategorisi, şablon/bayt mutasyonu, gramer üretimi (13 test) |
 | `tests/model/` | `JobStore`'un Mealy makinesi modeline uygunluğu; W yöntemiyle üretilen `V·W ∪ V·X·W` kümesi (9 test) |
 

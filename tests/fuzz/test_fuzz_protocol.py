@@ -123,7 +123,7 @@ class EveryCategoryStaysInsideTheDeclaredContract(unittest.TestCase):
                 with self.subTest(category=name, capability=capability):
                     self._check(name, value,
                                 lambda c=capability, b=body:
-                                capabilities.dispatch(c, b),
+                                capabilities.dispatch(c, "okul-a", b),
                                 (protocol.CapabilityError,))
 
 

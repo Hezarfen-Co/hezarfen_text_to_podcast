@@ -154,7 +154,7 @@ class UnansweredStreamRegression(unittest.TestCase):
 
     def test_response_over_eight_mib_returns_frame_too_large_instead_of_being_silently_swallowed(self) -> None:
         huge = protocol.ok_response(
-            "r-9", {"payload": "a" * (protocol.MAX_FRAME_BYTES + 16)}
+            "r-9", "okul-a", {"payload": "a" * (protocol.MAX_FRAME_BYTES + 16)}
         )
         self.proto._streams[3] = protocol.FrameStream()
         self.proto._finish(3, "r-9", huge)
@@ -175,7 +175,7 @@ class UnansweredStreamRegression(unittest.TestCase):
         self.assertNotIn(3, self.proto._streams)
 
     def test_response_under_the_limit_is_sent_as_is(self) -> None:
-        response = protocol.ok_response("r-8", {"job_id": "J"})
+        response = protocol.ok_response("r-8", "okul-a", {"job_id": "J"})
         self.proto._streams[7] = protocol.FrameStream()
         self.proto._finish(7, "r-8", response)
         self.assertEqual(decode_frame(self.quic.written[0][1]), response)
@@ -183,12 +183,19 @@ class UnansweredStreamRegression(unittest.TestCase):
     def test_huge_payload_produced_by_a_capability_also_returns_frame_too_large(self) -> None:
         from src import capabilities
 
-        def huge_capability(payload: dict) -> dict:
+        def huge_capability(school: str, payload: dict) -> dict:
             return {"payload": "a" * (protocol.MAX_FRAME_BYTES + 16)}
 
         capabilities.REGISTRY["podcast.devasa"] = huge_capability
         try:
-            self.run_request({"id": "r-7", "capability": "podcast.devasa", "payload": {}})
+            self.run_request(
+                {
+                    "id": "r-7",
+                    "school": "okul-a",
+                    "capability": "podcast.devasa",
+                    "payload": {},
+                }
+            )
         finally:
             capabilities.REGISTRY.pop("podcast.devasa", None)
         self.assertEqual(len(self.quic.written), 1)
@@ -197,7 +204,14 @@ class UnansweredStreamRegression(unittest.TestCase):
 
     def test_busy_is_returned_at_the_concurrent_request_ceiling_without_hanging_the_stream(self) -> None:
         self.proto._inflight = FakeSettings.max_concurrent
-        self.run_request({"id": "r-6", "capability": "podcast.status", "payload": {}})
+        self.run_request(
+            {
+                "id": "r-6",
+                "school": "okul-a",
+                "capability": "podcast.status",
+                "payload": {},
+            }
+        )
         response = decode_frame(self.quic.written[0][1])
         self.assertEqual(response["code"], "busy")
 

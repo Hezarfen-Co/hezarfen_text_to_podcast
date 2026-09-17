@@ -115,7 +115,7 @@ class SubmitStatusResultTests(LifecycleTestCase):
             [self.output_path("ders", "script", "duz_okuma", "ders-b01.script.json")],
         )
         submitted = capabilities.dispatch(
-            "podcast.submit", {"source_id": "ders.pdf", "format": "duz_okuma"}
+            "podcast.submit", "okul-a", {"source_id": "ders.pdf", "format": "duz_okuma"}
         )
         job_id = submitted["job_id"]
         self.assertEqual(submitted["state"], "queued")
@@ -123,12 +123,12 @@ class SubmitStatusResultTests(LifecycleTestCase):
         final = wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         self.assertEqual(final["state"], jobs.STATE_DONE, final["error_code"])
 
-        state = capabilities.dispatch("podcast.status", {"job_id": job_id})
+        state = capabilities.dispatch("podcast.status", "okul-a", {"job_id": job_id})
         self.assertEqual(state["state"], "done")
         self.assertEqual(state["progress"], 1.0)
         self.assertIsNone(state["error_code"])
 
-        result = capabilities.dispatch("podcast.result", {"job_id": job_id})
+        result = capabilities.dispatch("podcast.result", "okul-a", {"job_id": job_id})
         self.assertEqual(result["audio_id"], "ders/ses/duz_okuma/ders-b01.mp3")
         self.assertEqual(result["script_id"], "ders/script/duz_okuma/ders-b01.script.json")
         self.assertEqual(result["duration_secs"], 123.5)
@@ -141,7 +141,7 @@ class SubmitStatusResultTests(LifecycleTestCase):
             [self.output_path("ders", "ses", "duz_okuma", "ders-b01.mp3")],
             [self.output_path("ders", "script", "duz_okuma", "ders-b01.script.json")],
         )
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         store.shutdown(timeout=1.0)
 
@@ -149,7 +149,7 @@ class SubmitStatusResultTests(LifecycleTestCase):
         self._stores.append(reopened)
         self.assertEqual(reopened.swept, 0, "biten is yeniden acilista supurulmemeli")
         capabilities.configure(reopened, llm_ready=False)
-        result = capabilities.dispatch("podcast.result", {"job_id": job_id})
+        result = capabilities.dispatch("podcast.result", "okul-a", {"job_id": job_id})
         self.assertEqual(result["audio_id"], "ders/ses/duz_okuma/ders-b01.mp3")
 
     def test_progress_is_reported_while_the_job_is_still_running(self) -> None:
@@ -160,10 +160,10 @@ class SubmitStatusResultTests(LifecycleTestCase):
             [self.output_path("ders", "script", "duz_okuma", "ders-b01.script.json")],
             gate=gate,
         )
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         running = wait_for(store, job_id, (jobs.STATE_RUNNING,), 5.0)
         self.assertEqual(running["state"], jobs.STATE_RUNNING)
-        state = capabilities.dispatch("podcast.status", {"job_id": job_id})
+        state = capabilities.dispatch("podcast.status", "okul-a", {"job_id": job_id})
         self.assertIn(state["stage"], pipeline.REAL_STAGES)
         self.assertGreaterEqual(state["progress"], 0.0)
         self.assertLessEqual(state["progress"], 1.0)
@@ -174,20 +174,20 @@ class SubmitStatusResultTests(LifecycleTestCase):
 class FailurePathTests(LifecycleTestCase):
     def test_a_missing_source_fails_with_source_not_found_and_no_audio_id(self) -> None:
         store = self.pipeline_store("kayip", ["/o/x.mp3"], ["/o/x.json"])
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "yok.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "yok.pdf"})["job_id"]
         final = wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         self.assertEqual(final["state"], jobs.STATE_FAILED)
         self.assertEqual(final["error_code"], pipeline.SOURCE_NOT_FOUND)
         self.assertIsNone(final["audio_id"])
         with self.assertRaises(CapabilityError) as raised:
-            capabilities.dispatch("podcast.result", {"job_id": job_id})
+            capabilities.dispatch("podcast.result", "okul-a", {"job_id": job_id})
         self.assertEqual(raised.exception.code, "not_ready")
 
     def test_a_run_that_produced_no_mp3_fails_instead_of_returning_an_empty_result(self) -> None:
         store = self.pipeline_store(
             "sessiz", [], [self.output_path("ders", "script", "duz_okuma", "ders-b01.script.json")]
         )
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         final = wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 10.0)
         self.assertEqual(final["state"], jobs.STATE_FAILED)
         self.assertEqual(final["error_code"], pipeline.NO_AUDIO)
@@ -203,9 +203,9 @@ class CancellationTests(LifecycleTestCase):
             [self.output_path("ders", "script", "duz_okuma", "ders-b01.script.json")],
             gate=gate,
         )
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         wait_for(store, job_id, (jobs.STATE_RUNNING,), 5.0)
-        self.assertTrue(capabilities.dispatch("podcast.cancel", {"job_id": job_id})["cancelled"])
+        self.assertTrue(capabilities.dispatch("podcast.cancel", "okul-a", {"job_id": job_id})["cancelled"])
         gate.set()
         final = wait_for(
             store, job_id, (jobs.STATE_CANCELLED, jobs.STATE_DONE, jobs.STATE_FAILED), 10.0
@@ -215,7 +215,7 @@ class CancellationTests(LifecycleTestCase):
 
     def test_a_cancelled_job_is_cancelled_on_disk_too(self) -> None:
         store = self.pipeline_store("iptal-disk", ["/o/x.mp3"], ["/o/x.json"])
-        job_id = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        job_id = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED, jobs.STATE_CANCELLED), 10.0)
         store.shutdown(timeout=1.0)
         with open(self.root / "iptal-disk" / f"{job_id}.json", "r", encoding="utf-8") as handle:
@@ -245,12 +245,12 @@ class QuotaTests(LifecycleTestCase):
         )
         self._stores.append(store)
         capabilities.configure(store, llm_ready=False)
-        first = capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})["job_id"]
+        first = capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})["job_id"]
         with self.assertRaises(CapabilityError) as raised:
-            capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})
+            capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})
         self.assertEqual(raised.exception.code, "busy")
-        capabilities.dispatch("podcast.cancel", {"job_id": first})
-        capabilities.dispatch("podcast.submit", {"source_id": "ders.pdf"})
+        capabilities.dispatch("podcast.cancel", "okul-a", {"job_id": first})
+        capabilities.dispatch("podcast.submit", "okul-a", {"source_id": "ders.pdf"})
 
 
 if __name__ == "__main__":

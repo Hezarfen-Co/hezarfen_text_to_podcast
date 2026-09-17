@@ -8,30 +8,38 @@ from src import protocol
 class ApiRequestFormat(unittest.TestCase):
     def test_query_goes_in_a_separate_field_question_mark_inside_path_is_rejected(self):
         with self.assertRaises(protocol.ApiRefused) as raised:
-            protocol.build_api_request("r1", "/notes?limit=10")
+            protocol.build_api_request("r1", "okul-a", "/notes?limit=10")
         self.assertEqual(raised.exception.code, "bad_path")
 
     def test_path_must_start_with_slash(self):
         with self.assertRaises(protocol.ApiRefused):
-            protocol.build_api_request("r1", "notes")
+            protocol.build_api_request("r1", "okul-a", "notes")
 
     def test_request_fields_are_identical_to_the_backend_protocol(self):
         request = protocol.build_api_request(
-            "r1", "/notes", query="limit=10&offset=0", on_behalf_of="user:01J"
+            "r1", "okul-a", "/notes", query="limit=10&offset=0", on_behalf_of="user:01J"
         )
         self.assertEqual(request["id"], "r1")
+        self.assertEqual(request["school"], "okul-a")
         self.assertEqual(request["path"], "/notes")
         self.assertEqual(request["query"], "limit=10&offset=0")
         self.assertEqual(request["on_behalf_of"], "user:01J")
         self.assertEqual(request["method"], "GET")
 
     def test_leading_question_mark_of_the_query_is_trimmed(self):
-        request = protocol.build_api_request("r1", "/notes", query="?limit=10")
+        request = protocol.build_api_request("r1", "okul-a", "/notes", query="?limit=10")
         self.assertEqual(request["query"], "limit=10")
 
     def test_on_behalf_of_field_is_not_sent_at_all_when_not_given(self):
-        request = protocol.build_api_request("r1", "/auth/me")
+        request = protocol.build_api_request("r1", "okul-a", "/auth/me")
         self.assertNotIn("on_behalf_of", request)
+
+    def test_a_request_without_a_school_is_refused_before_it_reaches_the_wire(self):
+        for school in ("", "   ", None):
+            with self.subTest(school=school):
+                with self.assertRaises(protocol.ApiRefused) as raised:
+                    protocol.build_api_request("r1", school, "/auth/me")
+                self.assertEqual(raised.exception.code, "malformed")
 
 
 class ApiResponseInterpretation(unittest.TestCase):

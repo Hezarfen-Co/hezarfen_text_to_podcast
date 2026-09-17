@@ -5,7 +5,7 @@ from typing import Any, Callable
 from . import jobs
 from .protocol import CapabilityError
 
-Handler = Callable[[dict], dict]
+Handler = Callable[[str, dict], dict]
 
 FORMATS = ("tek_ogretici", "ogrenci_hoca", "duz_okuma")
 DEFAULT_FORMAT = "duz_okuma"
@@ -69,7 +69,7 @@ def _lookup(store: jobs.JobStore, job_id: str) -> dict:
         raise CapabilityError("not_found", str(exc)) from exc
 
 
-def submit(payload: dict) -> dict:
+def submit(school: str, payload: dict) -> dict:
     source_id = _require_text(payload, "source_id")
     job_format = _optional_choice(payload, "format", FORMATS, DEFAULT_FORMAT)
     if job_format in LLM_FORMATS and not _llm_ready:
@@ -88,7 +88,7 @@ def submit(payload: dict) -> dict:
     return {"job_id": record["job_id"], "state": record["state"], "eta_secs": eta}
 
 
-def status(payload: dict) -> dict:
+def status(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     record = _lookup(_active_store(), job_id)
     return {
@@ -100,7 +100,7 @@ def status(payload: dict) -> dict:
     }
 
 
-def result(payload: dict) -> dict:
+def result(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     record = _lookup(_active_store(), job_id)
     if record["state"] != jobs.STATE_DONE:
@@ -118,7 +118,7 @@ def result(payload: dict) -> dict:
     }
 
 
-def cancel(payload: dict) -> dict:
+def cancel(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     store = _active_store()
     try:
@@ -142,7 +142,7 @@ def names() -> list[str]:
     return sorted(REGISTRY)
 
 
-def dispatch(capability: str, payload: Any) -> dict:
+def dispatch(capability: str, school: str, payload: Any) -> dict:
     handler = REGISTRY.get(capability)
     if handler is None:
         raise CapabilityError("unsupported_capability", f"bilinmeyen yetenek: {capability}")
@@ -150,4 +150,4 @@ def dispatch(capability: str, payload: Any) -> dict:
         payload = {}
     if not isinstance(payload, dict):
         raise CapabilityError("bad_request", "'payload' bir nesne olmali")
-    return handler(payload)
+    return handler(school, payload)

@@ -89,9 +89,15 @@ class Config:
         self.port = env_int("AI_BRIDGE_PORT", 8090, 1, 65535)
         self.backend_url = env_str("AI_BACKEND_URL", "http://hezarfen-backend:8080").rstrip("/")
         self.server_name = env_str("AI_TLS_SERVER_NAME", "localhost")
+        self.tls_fingerprint = (
+            env_str("AI_TLS_FINGERPRINT", "").strip().lower().replace(":", "")
+        )
         self.service = env_str("AI_SERVICE_NAME", "podcast")
         self.max_concurrent = env_int("AI_MAX_CONCURRENT", 2, 1, 64)
         self.reconnect_secs = env_float("AI_RECONNECT_SECS", 3.0, 0.1, 300.0)
+        self.reconnect_max_secs = env_float(
+            "AI_RECONNECT_MAX_SECS", 120.0, 1.0, 3600.0
+        )
         self.token = env_str("AI_SHARED_TOKEN", "")
         self.has_token = bool(self.token)
         self.job_root = _absolute(env_str("PODCAST_JOB_ROOT", "/data/podcast/jobs"))
@@ -108,6 +114,14 @@ class Config:
         self.chapter_limit = env_int("PODCAST_CHAPTER_LIMIT", 1, -1, 4096)
         self.tts_engine = env_str("PODCAST_TTS_ENGINE", "supertonic-3")
         self.has_llm_key = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+        if self.tls_fingerprint and not (
+            len(self.tls_fingerprint) == 64
+            and all(char in "0123456789abcdef" for char in self.tls_fingerprint)
+        ):
+            raise ConfigError(
+                "AI_TLS_FINGERPRINT 64 karakterlik SHA-256 hex olmali "
+                f"(iki nokta ayraclari atilir); alinan uzunluk: {len(self.tls_fingerprint)}"
+            )
         if require_token and not self.has_token:
             raise ConfigError(
                 "AI_SHARED_TOKEN tanimli degil; backend ile ayni sir olmadan kayit yapilamaz"
@@ -117,7 +131,9 @@ class Config:
         return (
             f"servis='{self.service}' hedef={self.host}:{self.port} "
             f"backend={self.backend_url} tls_ad={self.server_name} "
-            f"max_es_zamanli={self.max_concurrent} yeniden_baglanma={self.reconnect_secs}s "
+            f"tls_parmak_izi={'PINLI' if self.tls_fingerprint else 'TOFU(pinsiz)'} "
+            f"max_es_zamanli={self.max_concurrent} "
+            f"yeniden_baglanma={self.reconnect_secs}s..{self.reconnect_max_secs}s "
             f"log={self.log_level} token={'tanimli' if self.has_token else 'TANIMSIZ'} "
             f"is_kok={self.job_root} isciler={self.workers} max_is={self.max_jobs} "
             f"asama={self.stage_secs}s "

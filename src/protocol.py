@@ -6,7 +6,7 @@ import math
 import struct
 from typing import Any
 
-PROTOCOL = "hab/1"
+PROTOCOL = "hab/2"
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 KEEPALIVE_SECS = 10
 IDLE_TIMEOUT_SECS = 30.0
@@ -22,10 +22,17 @@ class CapabilityError(Exception):
         self.code = code
 
 
+PERMANENT_REJECTS = ("unsupported_protocol", "unauthorized")
+
+
 class HandshakeRejected(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"backend kaydi reddetti ({code}): {message}")
         self.code = code
+
+    @property
+    def permanent(self) -> bool:
+        return self.code in PERMANENT_REJECTS
 
 
 def encode_frame(obj: Any) -> bytes:
@@ -95,28 +102,39 @@ def parse_greeting(greeting: Any) -> str:
     )
 
 
-def ok_response(request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return {"status": "ok", "id": request_id, "payload": payload}
+def ok_response(request_id: str, school: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {"status": "ok", "id": request_id, "school": school, "payload": payload}
 
 
-def err_response(request_id: str, code: str, message: str) -> dict[str, Any]:
-    return {"status": "err", "id": request_id, "code": code, "message": message}
+def err_response(
+    request_id: str, school: str, code: str, message: str
+) -> dict[str, Any]:
+    return {
+        "status": "err",
+        "id": request_id,
+        "school": school,
+        "code": code,
+        "message": message,
+    }
 
 
-def parse_request(frame: Any) -> tuple[str, str, Any, float | None]:
+def parse_request(frame: Any) -> tuple[str, str, str, Any, float | None]:
     if not isinstance(frame, dict):
         raise CapabilityError("bad_request", "istek cercevesi bir nesne degil")
     request_id = frame.get("id")
+    school = frame.get("school")
     capability = frame.get("capability")
     if not isinstance(request_id, str) or not isinstance(capability, str):
         raise CapabilityError("bad_request", "'id' ve 'capability' metin olmali")
+    if not isinstance(school, str) or not school.strip():
+        raise CapabilityError("bad_request", "'school' bos olmayan bir metin olmali")
     deadline_ms = frame.get("deadline_ms")
     timeout = None
     if isinstance(deadline_ms, (int, float)) and not isinstance(deadline_ms, bool):
         if deadline_ms > 0:
             budget_secs = deadline_ms / 1000.0
             timeout = max(budget_secs - DEADLINE_MARGIN_SECS, budget_secs * 0.5)
-    return request_id, capability, frame.get("payload"), timeout
+    return request_id, school, capability, frame.get("payload"), timeout
 
 API_ALLOWLIST = (
     "/auth/me",
@@ -139,14 +157,19 @@ API_ALLOWLIST = (
 
 
 class ApiRefused(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, school: str = "", request_id: str = ""
+    ) -> None:
         super().__init__(f"kopru istegi reddetti ({code}): {message}")
         self.code = code
+        self.school = school
+        self.request_id = request_id
 
 
 class ApiResponse:
-    def __init__(self, request_id: str, status: int, body: Any) -> None:
+    def __init__(self, request_id: str, school: str, status: int, body: Any) -> None:
         self.request_id = request_id
+        self.school = school
         self.status = status
         self.body = body
 
@@ -157,17 +180,26 @@ class ApiResponse:
 
 def build_api_request(
     request_id: str,
+    school: str,
     path: str,
     query: str | None = None,
     on_behalf_of: str | None = None,
     method: str = "GET",
 ) -> dict[str, Any]:
+    if not isinstance(school, str) or not school.strip():
+        raise ApiRefused("malformed", "okul slug'i zorunlu; varsayilan yok")
     if not isinstance(path, str) or not path.startswith("/") or "?" in path:
         raise ApiRefused(
             "bad_path",
             f"yol / ile baslamali ve ? icermemeli (query ayri alanda gider): {path!r}",
+            school=school,
         )
-    request: dict[str, Any] = {"id": request_id, "path": path, "method": method}
+    request: dict[str, Any] = {
+        "id": request_id,
+        "school": school,
+        "path": path,
+        "method": method,
+    }
     if query:
         request["query"] = query.lstrip("?")
     if on_behalf_of:
@@ -196,14 +228,20 @@ def parse_api_response(frame: Any) -> ApiResponse:
     if not isinstance(frame, dict):
         raise ApiRefused("malformed", "api cevabi bir nesne degil")
     outcome = frame.get("outcome")
+    school = str(frame.get("school", ""))
+    request_id = str(frame.get("id", ""))
     if outcome == "err":
         raise ApiRefused(
-            str(frame.get("code", "?")), str(frame.get("message", ""))
+            str(frame.get("code", "?")),
+            str(frame.get("message", "")),
+            school=school,
+            request_id=request_id,
         )
     if outcome != "ok":
-        raise ApiRefused("malformed", f"bilinmeyen outcome: {outcome!r}")
+        raise ApiRefused("malformed", f"bilinmeyen outcome: {outcome!r}", school=school)
     return ApiResponse(
-        str(frame.get("id", "")),
+        request_id,
+        school,
         _coerce_status(frame.get("status", 0)),
         frame.get("body"),
     )
