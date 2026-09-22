@@ -22,7 +22,7 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
 - **Sürüm kimliği `hab/2`.** Backend hem ALPN'de hem `Hello.protocol` alanında
   denetler; ikisi de `src/protocol.py` içindeki tek sabitten gelir.
 - **Her `Response` okulu yankılar.** Filo tüm okullara ortak olduğu için `Hello`
-  okul taşımaz; her istek çerçevesi okulunu slug ile adlandırır ve her cevap onu
+  okul taşımaz; her istek çerçevesi okulunu tireli uuid ile adlandırır ve her cevap onu
   aynen geri yazar. Okulsuz istek `bad_request`'tir; varsayılan yoktur. Aynı
   kural `ApiRequest`/`ApiResponse` çifti için de geçerlidir.
 - **Kalıcı red (`unauthorized`, `unsupported_protocol`) servisi çıkarmaz.**

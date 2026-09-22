@@ -37,7 +37,7 @@ aynı konumlanma.
    tek `Request` okunur, tek `Response` yazılır, akış biter.
 
 **Okul kapsamı:** filo tüm okullara ortaktır, bu yüzden `Hello` okul taşımaz;
-her `Request` kendi okulunu slug ile adlandırır ve her `Response` onu **aynen
+her `Request` kendi okulunu tireli uuid ile adlandırır ve her `Response` onu **aynen
 yankılar**. Okulsuz istek `bad_request` ile reddedilir — varsayılan ya da geri
 düşme yoktur, çünkü yanlış okulun verisinden cevaplanan bir okuma tam olarak bu
 alanın var olma sebebidir. Aynı kural servisin açtığı okuma akışında da geçerli:
@@ -130,7 +130,7 @@ baytı köprüden geçmez (`AI_API_ALLOWLIST` bayt sunan rotaları bilerek
 dışarıda bırakıyor, `constant.rs:612-615`). Dosya paylaşılan hacimde şu yoldan
 çözülür: `PODCAST_MEDIA_ROOT/<school>/<source_key>`; `source_key` notun **en
 yeni PDF ekinin** blob anahtarıdır (`course_note_file.file`), `<school>` ise
-çerçevenin taşıdığı okul slug'ıdır.
+çerçevenin taşıdığı okul uuid'sidir.
 
 ## Durum makinesi
 
@@ -234,7 +234,7 @@ başlamadan iptal edildi) runner hiç çağrılmaz.
 
 | Üye | Anlamı |
 | --- | --- |
-| `ctx.job_id` / `ctx.source_id` / `ctx.source_key` / `ctx.school` / `ctx.format` | kaydın kimliği, kaynak kimliği, kaynak blob anahtarı, okul slug'ı, formatı |
+| `ctx.job_id` / `ctx.source_id` / `ctx.source_key` / `ctx.school` / `ctx.format` | kaydın kimliği, kaynak kimliği, kaynak blob anahtarı, okul uuid'si, formatı |
 | `ctx.stages` | `JobStore.stages` (aşama adları) |
 | `ctx.cancelled()` | iptal bayrağı **veya** servis kapanıyor mu |
 | `ctx.check()` | iptal varsa `JobCancelled` fırlatır, yoksa `None` |
@@ -369,7 +369,7 @@ sıfırsa uyarı loglar.
 
 | `error_code` | ne zaman |
 | --- | --- |
-| `source_not_found` | `resolve_source` reddetti (`source_key` ya da okul slug'ı kaçışı), `PODCAST_MEDIA_ROOT/<school>/<source_key>` dosyası yok, ya da `Hat` kurulurken `HatHatasi` |
+| `source_not_found` | `resolve_source` reddetti (`source_key` ya da okul uuid'si kaçışı), `PODCAST_MEDIA_ROOT/<school>/<source_key>` dosyası yok, ya da `Hat` kurulurken `HatHatasi` |
 | `no_audio` | hat koştu ama `mp3_yollari` **boş** — sessizce boş cevap dönmek yerine iş `failed` olur |
 | `internal` | başka her istisna (işçinin genel dalı) |
 | `interrupted` | açılış süpürmesi (süreç koşan işin ortasında öldü) |
@@ -407,7 +407,7 @@ aynıdır. Aşama adları:
 `PODCAST_ETA_SECS` verilmişse her iki modda da o kazanır.
 
 `resolve_source(media_root, school, source_key)` `PODCAST_MEDIA_ROOT` altındaki
-`<school>/<source_key>` dosya yolunu üretir: okul slug'ı `^[a-z0-9-]{1,64}$`,
+`<school>/<source_key>` dosya yolunu üretir: okul uuid'si `^[a-z0-9-]{1,64}$`,
 `source_key` ise `^[A-Za-z0-9._-]{1,128}$` desenine uymalıdır; uymayan girdi
 `ValueError` alır. Her iki segment için de `Path.resolve()` sonrası sonucun
 medya kökünün **altında** kaldığı ayrıca doğrulanır (symlink kaçışı için; `..`
@@ -614,7 +614,7 @@ Denetlediği kapılar:
 - **iptal yarışı**: `finish()` çağrılmadan hemen önce gelen `cancel`'ın işi
   `done` değil `cancelled` bitirdiği ve bunun **diske de** yansıdığı
 - **`queued → failed`** geçişinin yasal olduğu (başlamadan patlayan iş)
-- **`resolve_source` yol kaçışı**: okul slug'ı ve `source_key` için `..`, `../x`,
+- **`resolve_source` yol kaçışı**: okul uuid'si ve `source_key` için `..`, `../x`,
   `a/b`, `/etc/passwd`, boş dize, 129 karakterlik ad, `..\x`, `.`, `OKUL` ve
   `okul_a` reddedilir; geçerli çift `<school>/<source_key>` altına çözülür
 - **`PODCAST_ETA_SECS`** verildiğinde `estimate_eta`'nın sahte aşama süresini
@@ -692,7 +692,7 @@ bilinen bir kusuru geri getirdi mi" der.
 | `regress_identifier_path.py` | `audio_id`/`script_id` çıktı köküne göre **relatif yol** olmalı, dosya adı değil. Gerçek yol `<stem>/ses/<format>/<stem>-bNN.mp3`; sadece dosya adı alınırsa üç dizin seviyesi kaybolur **ve** aynı PDF'in `duz_okuma` ile `tek_ogretici` koşusu aynı kimliği döner (bölüm_id formattan bağımsız). Kök dışı kalan yol dosya adına düşer. |
 | `regress_script_alignment.py` | `bolum_limiti` yalnızca **sese** uygulanıyor; `script_yollari` her zaman tüm bölümleri taşır. 1 ses + 3 script → `script_ids` 1 elemana filtrelenmeli. Eşleşme hiç tutmazsa filtrelenmeden dönmeli (ve uyarı loglanmalı). |
 | `regress_absolute_path.py` | `job_root`/`output_root`/`media_root`/`ledger_db` **mutlak** olmalı. Ölçülen kusur: göreli çıktı kökü verildiğinde hattın ffmpeg concat listesi yolu ikiye katlıyor ve montaj patlıyor. |
-| `regress_path_traversal.py` | `resolve_source` şunları reddetmeli: `..`, `../x`, `a/b`, `/etc/passwd`, `..\x`, `.`, boş ad, 129 karakterlik ad, `\\srv\share`, `C:\Windows`, NUL içeren ad; ayrıca okul slug'ı için `OKUL`, `Okul-A`, `okul_a`, `okul.a`, 65 karakterlik ad. Geçerli çift (okul + anahtar) kabul edilir ve sonuç `media_root` **altında** kalır. |
+| `regress_path_traversal.py` | `resolve_source` şunları reddetmeli: `..`, `../x`, `a/b`, `/etc/passwd`, `..\x`, `.`, boş ad, 129 karakterlik ad, `\\srv\share`, `C:\Windows`, NUL içeren ad; ayrıca okul uuid'si için `OKUL`, `Okul-A`, `okul_a`, `okul.a`, 65 karakterlik ad. Geçerli çift (okul + anahtar) kabul edilir ve sonuç `media_root` **altında** kalır. |
 | `regress_schema_validation.py` | Eksik alanlı iş kaydı açılışta atlanmalı (`KeyError` değil). `REQUIRED_FIELDS`'a `audio_ids`/`script_ids` **eklenmemeli** — eklenirse alan eklenmeden önce yazılmış eski kayıtlar topluca atılır. `source_key` ise bilinçli olarak zorunludur: onsuz bir iş kaynağa hiç çözülemez. |
 | `regress_tmp_residue.py` | Geçici dosya adı pid içerir; açılışta `*.json.tmp*` artıkları temizlenir; atomik yazma temp + `os.replace` ile yapılır. Ayrıca temizleme mantığı **kopyaladığı dosyaları silmemeli** (PowerShell `-Include` tuzağının Python karşılığı: filtre gerçekten uygulanıyor mu). |
 | `regress_secret_leak.py` | `DEEPSEEK_API_KEY` ve `AI_SHARED_TOKEN` değerleri `Config.summary()` çıktısında, iş JSON kayıtlarında ve istisna metinlerinde geçmemeli. Kanarya değerlerle sınanır. |

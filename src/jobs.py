@@ -55,6 +55,7 @@ REQUIRED_FIELDS = (
 )
 
 SAFE_SOURCE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# Media-path segment is the hyphenated school uuid (SAFE_SCHOOL already matches it).
 SAFE_SCHOOL = re.compile(r"^[a-z0-9-]{1,64}$")
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
@@ -125,6 +126,7 @@ def can_transition(current: str, target: str) -> bool:
     return target in TRANSITIONS.get(current, ())
 
 
+# `school` is the hyphenated school uuid, the first path segment under media_root.
 def resolve_source(
     media_root: str | os.PathLike, school: str, source_key: str
 ) -> Path:
