@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -199,6 +200,37 @@ def derive_outputs(result: Any, output_root: Any = None) -> dict[str, Any]:
         "script_ids": script_ids,
     }
 
+def joined_transcript(script_ids: list[str], output_root: Path) -> str:
+    bodies: list[str] = []
+    try:
+        root = output_root.resolve()
+    except OSError:
+        return ""
+    for identifier in script_ids:
+        if not isinstance(identifier, str) or not identifier.strip():
+            continue
+        if identifier.startswith(("/", "\\")) or ":" in identifier:
+            continue
+        try:
+            target = (root / identifier).resolve()
+        except OSError:
+            continue
+        if target != root and root not in target.parents:
+            continue
+        if not target.is_file():
+            continue
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        chapter = payload.get("metin")
+        if isinstance(chapter, str) and chapter:
+            bodies.append(chapter)
+    return "\n\n".join(bodies)
+
+
 
 def build_log_hook(
     ctx: Any,
@@ -323,6 +355,7 @@ def make_runner(
             script_id=outputs["script_id"],
             audio_ids=outputs["audio_ids"],
             script_ids=outputs["script_ids"],
+            transcript=joined_transcript(outputs["script_ids"], output_dir),
         )
         if record["state"] == jobs.STATE_DONE:
             config.log(

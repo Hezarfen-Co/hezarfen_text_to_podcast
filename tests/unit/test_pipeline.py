@@ -1,9 +1,11 @@
+import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from src import config, pipeline
+from src import config, jobs, pipeline
 
 
 class FakeResult:
@@ -293,6 +295,147 @@ class ErrorCodeTests(PipelineTestCase):
 
     def test_simulate_warning_never_hides_that_the_audio_is_fake(self) -> None:
         self.assertIn("GERCEK DEGIL", pipeline.FAKE_WARNING)
+
+
+
+class TranscriptJoinTests(PipelineTestCase):
+    def test_chapter_bodies_are_joined_with_a_blank_line(self) -> None:
+        output = self.root / "cikti"
+        output.mkdir()
+        first = output / "b01.script.json"
+        second = output / "b02.script.json"
+        first.write_text(json.dumps({"metin": "ilk bolum"}), encoding="utf-8")
+        second.write_text(json.dumps({"metin": "ikinci bolum"}), encoding="utf-8")
+        joined = pipeline.joined_transcript(
+            ["b01.script.json", "b02.script.json"], output
+        )
+        self.assertEqual(joined, "ilk bolum\n\nikinci bolum")
+
+    def test_a_missing_or_empty_script_stays_an_empty_string(self) -> None:
+        output = self.root / "cikti-bos"
+        output.mkdir()
+        (output / "bos.script.json").write_text(
+            json.dumps({"metin": ""}), encoding="utf-8"
+        )
+        (output / "not-json.script.json").write_text("bu json degil", encoding="utf-8")
+        self.assertEqual(pipeline.joined_transcript(["yok.script.json"], output), "")
+        self.assertEqual(pipeline.joined_transcript(["bos.script.json"], output), "")
+        self.assertEqual(pipeline.joined_transcript(["not-json.script.json"], output), "")
+        self.assertEqual(pipeline.joined_transcript([], output), "")
+
+    def test_the_runner_puts_the_joined_transcript_on_the_done_record(self) -> None:
+        media = self.root / "medya"
+        (media / "okul-a").mkdir(parents=True)
+        (media / "okul-a" / "ders.pdf").write_bytes(b"%PDF-1.4\n")
+        output = self.root / "cikti-hat"
+        output.mkdir()
+        first = output / "b01.script.json"
+        second = output / "b02.script.json"
+        first.write_text(json.dumps({"metin": "alfa"}), encoding="utf-8")
+        second.write_text(json.dumps({"metin": "beta"}), encoding="utf-8")
+        audio = output / "ders.mp3"
+        audio.write_bytes(b"ID3")
+
+        class Factory:
+            def __init__(self, **kwargs) -> None:
+                self.sonuc = type("Result", (), {})()
+                self.sonuc.mp3_yollari = [str(audio)]
+                self.sonuc.script_yollari = [str(first), str(second)]
+                self.sonuc.ses_toplam_sn = 4.0
+                self.sonuc.adimlar = []
+
+            def kos(self):
+                return self.sonuc
+
+        runner = pipeline.make_runner(
+            str(media),
+            str(output),
+            0,
+            "supertonic-3",
+            Factory,
+            RuntimeError,
+            RuntimeError,
+        )
+        store = jobs.JobStore(
+            root=self.root / "isler",
+            workers=1,
+            stage_secs=0.0,
+            runner=runner,
+            stages=pipeline.REAL_STAGES,
+        )
+        try:
+            store.start()
+            job_id = store.submit(
+                "11111111-1111-7111-8111-111111111111",
+                "ders.pdf",
+                "duz_okuma",
+                school="okul-a",
+                source_key="ders.pdf",
+            )[0]["job_id"]
+            limit = time.monotonic() + 5.0
+            final = store.get(job_id)
+            while final["state"] not in (jobs.STATE_DONE, jobs.STATE_FAILED) and time.monotonic() < limit:
+                time.sleep(0.01)
+                final = store.get(job_id)
+        finally:
+            store.shutdown(timeout=1.0)
+        self.assertEqual(final["state"], jobs.STATE_DONE, final.get("error_code"))
+        self.assertEqual(final["transcript"], "alfa\n\nbeta")
+
+    def test_a_runner_with_no_script_files_finishes_with_an_empty_transcript(self) -> None:
+        media = self.root / "medya-bos"
+        (media / "okul-a").mkdir(parents=True)
+        (media / "okul-a" / "ders.pdf").write_bytes(b"%PDF-1.4\n")
+        output = self.root / "cikti-yok"
+        output.mkdir()
+        audio = output / "ders.mp3"
+        audio.write_bytes(b"ID3")
+
+        class Factory:
+            def __init__(self, **kwargs) -> None:
+                self.sonuc = type("Result", (), {})()
+                self.sonuc.mp3_yollari = [str(audio)]
+                self.sonuc.script_yollari = [str(output / "yok.script.json")]
+                self.sonuc.ses_toplam_sn = 1.0
+                self.sonuc.adimlar = []
+
+            def kos(self):
+                return self.sonuc
+
+        runner = pipeline.make_runner(
+            str(media),
+            str(output),
+            0,
+            "supertonic-3",
+            Factory,
+            RuntimeError,
+            RuntimeError,
+        )
+        store = jobs.JobStore(
+            root=self.root / "isler-bos",
+            workers=1,
+            stage_secs=0.0,
+            runner=runner,
+            stages=pipeline.REAL_STAGES,
+        )
+        try:
+            store.start()
+            job_id = store.submit(
+                "22222222-2222-7222-8222-222222222222",
+                "ders.pdf",
+                "duz_okuma",
+                school="okul-a",
+                source_key="ders.pdf",
+            )[0]["job_id"]
+            limit = time.monotonic() + 5.0
+            final = store.get(job_id)
+            while final["state"] not in (jobs.STATE_DONE, jobs.STATE_FAILED) and time.monotonic() < limit:
+                time.sleep(0.01)
+                final = store.get(job_id)
+        finally:
+            store.shutdown(timeout=1.0)
+        self.assertEqual(final["state"], jobs.STATE_DONE, final.get("error_code"))
+        self.assertEqual(final["transcript"], "")
 
 
 if __name__ == "__main__":

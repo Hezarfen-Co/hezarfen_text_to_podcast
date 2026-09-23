@@ -362,6 +362,7 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
                 script_id=_relative(script_paths[0], output_root),
                 audio_ids=[_relative(final, output_root)],
                 script_ids=[_relative(path, output_root) for path in script_paths],
+                transcript="\n\n".join(bodies),
             )
             if record["state"] == jobs.STATE_DONE:
                 succeeded = True

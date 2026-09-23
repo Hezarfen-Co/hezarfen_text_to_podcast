@@ -208,6 +208,7 @@ class JobContext:
         script_id: str,
         audio_ids: list[str] | None = None,
         script_ids: list[str] | None = None,
+        transcript: str = "",
     ) -> dict[str, Any]:
         return self.store.finish(
             self.job_id,
@@ -216,6 +217,7 @@ class JobContext:
             script_id=script_id,
             audio_ids=audio_ids,
             script_ids=script_ids,
+            transcript=transcript,
         )
 
 
@@ -767,8 +769,10 @@ class JobStore:
         script_id: str,
         audio_ids: list[str] | None = None,
         script_ids: list[str] | None = None,
+        transcript: str = "",
     ) -> dict[str, Any]:
         with self._lock:
+            text = transcript if isinstance(transcript, str) else ""
             record = self._jobs.get(job_id)
             if record is None:
                 raise JobNotFound(job_id)
@@ -799,6 +803,7 @@ class JobStore:
                     script_id=script_id,
                     audio_ids=_id_list(audio_ids, audio_id),
                     script_ids=_id_list(script_ids, script_id),
+                    transcript=text,
                 )
                 code = self._report_done(done)
             if code is not None:
@@ -817,6 +822,7 @@ class JobStore:
                 script_id=script_id,
                 audio_ids=_id_list(audio_ids, audio_id),
                 script_ids=_id_list(script_ids, script_id),
+                transcript=text,
             )
         with self._lock:
             record = self._jobs.get(job_id)
@@ -835,4 +841,5 @@ class JobStore:
             script_id=script_id,
             audio_ids=_id_list(audio_ids, audio_id),
             script_ids=_id_list(script_ids, script_id),
+            transcript=text,
         )

@@ -4,6 +4,7 @@ import hashlib
 import json
 import struct
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -584,6 +585,94 @@ class ReconnectLoop(unittest.TestCase):
         self.assertGreaterEqual(
             len(attempts), 2, "gecici red sonrasi bir sonraki deneme zamanlanmali"
         )
+
+
+def _report_record(**extra: object) -> dict:
+    record = {
+        "job_id": "j1",
+        "source_id": "ders.pdf",
+        "format": "duz_okuma",
+        "user_id": "u1",
+        "state": "done",
+        "stage": "done",
+        "progress": 1.0,
+        "error_code": None,
+    }
+    record.update(extra)
+    return record
+
+
+def _reported_payload(record: dict) -> dict:
+    from src import backend
+
+    seen: list[dict] = []
+
+    class Proto:
+        async def call_capability(self, school, capability, payload):
+            seen.append(dict(payload))
+            return {"ok": True}
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def spin() -> None:
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=spin, daemon=True)
+    thread.start()
+    if not ready.wait(2):
+        raise RuntimeError("olay dongusu acilmadi")
+    try:
+        backend.BackendClient(loop, Proto()).report("okul-a", record)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()
+    if len(seen) != 1:
+        raise AssertionError(f"rapor cercevesi gitmedi: {seen}")
+    return seen[0]
+
+
+class TranscriptFrameTests(unittest.TestCase):
+    def test_a_missing_transcript_stays_empty_and_the_frame_encodes(self) -> None:
+        payload = _reported_payload(_report_record())
+        self.assertEqual(payload["transcript"], "")
+        frame = protocol.encode_frame(
+            {
+                "id": "1",
+                "school": "okul-a",
+                "capability": protocol.PODCAST_REPORT_CAPABILITY,
+                "payload": payload,
+            }
+        )
+        decoded = json.loads(frame[4:])
+        self.assertEqual(decoded["payload"]["transcript"], "")
+
+    def test_an_empty_transcript_stays_empty_and_the_frame_encodes(self) -> None:
+        payload = _reported_payload(_report_record(transcript=""))
+        self.assertEqual(payload["transcript"], "")
+        frame = protocol.encode_frame({"payload": payload})
+        decoded = json.loads(frame[4:])
+        self.assertEqual(decoded["payload"]["transcript"], "")
+
+    def test_the_done_report_frame_carries_the_transcript(self) -> None:
+        text = "ilk bolum\n\nikinci bolum"
+        payload = _reported_payload(_report_record(transcript=text))
+        self.assertEqual(payload["transcript"], text)
+        frame = protocol.encode_frame(
+            {
+                "id": "2",
+                "school": "okul-a",
+                "capability": protocol.PODCAST_REPORT_CAPABILITY,
+                "payload": payload,
+            }
+        )
+        decoded = json.loads(frame[4:])
+        self.assertEqual(decoded["payload"]["transcript"], text)
+        self.assertLess(len(frame), protocol.MAX_FRAME_BYTES)
+
 
 
 if __name__ == "__main__":

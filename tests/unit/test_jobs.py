@@ -430,5 +430,79 @@ class StatusFileTests(JobTestCase):
         self.assertIsNone(jobs.read_status(root))
 
 
+class _CapturingReporter:
+    def __init__(self) -> None:
+        self.reports: list[dict] = []
+
+    def report(self, school: str, record: dict) -> dict:
+        self.reports.append(dict(record))
+        return {"ok": True}
+
+    def upload(self, school: str, record: dict, path, content_type: str = "audio/mpeg") -> dict:
+        return {"key": path.name, "size": path.stat().st_size}
+
+
+class TranscriptTests(JobTestCase):
+    def test_finish_without_a_transcript_stores_an_empty_string(self) -> None:
+        store = self.make_store("bos-metin")
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
+        store.transition(job_id, jobs.STATE_RUNNING)
+        record = store.finish(job_id, audio_id="a", duration_secs=1.0, script_id="s")
+        self.assertEqual(record["transcript"], "")
+        self.assertEqual(store.get(job_id)["transcript"], "")
+
+    def test_finish_stores_the_given_transcript_on_the_done_record(self) -> None:
+        store = self.make_store("dolu-metin")
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
+        store.transition(job_id, jobs.STATE_RUNNING)
+        record = store.finish(
+            job_id,
+            audio_id="a",
+            duration_secs=1.0,
+            script_id="s",
+            transcript="ilk bolum\n\nikinci bolum",
+        )
+        self.assertEqual(record["transcript"], "ilk bolum\n\nikinci bolum")
+        self.assertEqual(store.get(job_id)["transcript"], "ilk bolum\n\nikinci bolum")
+
+    def test_a_non_string_transcript_does_not_break_finish(self) -> None:
+        store = self.make_store("kotu-metin")
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
+        store.transition(job_id, jobs.STATE_RUNNING)
+        record = store.finish(
+            job_id, audio_id="a", duration_secs=1.0, script_id="s", transcript=None
+        )
+        self.assertEqual(record["state"], jobs.STATE_DONE)
+        self.assertEqual(record["transcript"], "")
+
+    def test_the_done_report_payload_carries_the_transcript(self) -> None:
+        reporter = _CapturingReporter()
+        output = self.root / "cikti"
+        output.mkdir()
+        (output / "a.mp3").write_bytes(b"ID3")
+        store = self.make_store("rapor-metin", output_root=output, reporter=reporter)
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma", school="okul-a")[0]["job_id"]
+        store.transition(job_id, jobs.STATE_RUNNING)
+        store.finish(
+            job_id,
+            audio_id="a.mp3",
+            duration_secs=1.0,
+            script_id="s.json",
+            transcript="sesli metin",
+        )
+        done = [item for item in reporter.reports if item["state"] == jobs.STATE_DONE]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["transcript"], "sesli metin")
+
+    def test_simulated_pipeline_finishes_with_an_empty_transcript(self) -> None:
+        store = self.make_store("sahte-metin")
+        store.start()
+        job_id = store.submit(JOB_ONE, "x", "duz_okuma")[0]["job_id"]
+        final = wait_for(store, job_id, (jobs.STATE_DONE, jobs.STATE_FAILED), 5.0)
+        self.assertEqual(final["state"], jobs.STATE_DONE)
+        self.assertEqual(final["transcript"], "")
+
+
+
 if __name__ == "__main__":
     unittest.main()
