@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from . import capabilities, config, jobs, llm, tts
+from . import capabilities, config, extract, jobs, llm, tts
 
 STAGES = ("kaynak", "metin", "script", "tts", "mux")
 ETA_SECS = 300.0
@@ -17,6 +17,7 @@ ETA_SECS = 300.0
 SOURCE_NOT_FOUND = "source_not_found"
 NO_TEXT = "no_text_layer"
 SOURCE_UNREADABLE = "source_unreadable"
+UNSUPPORTED_SOURCE = "unsupported_source"
 EXTRACTOR_UNAVAILABLE = "extractor_unavailable"
 SCRIPT_EMPTY = "script_empty"
 MUX_ERROR = "mux_error"
@@ -129,7 +130,48 @@ def _page_texts(doc: Any, settings: Any, check: Callable[[], None]) -> tuple[lis
     return texts, ocr_pages, bool(tesseract)
 
 
+def _finish_text(
+    blocks: list[str], settings: Any, kind: str, path: str
+) -> tuple[str, int, int]:
+    text = _clean_text("\n".join(blocks))
+    if len(text) < int(settings.min_text_chars):
+        raise EngineError(
+            NO_TEXT,
+            f"{kind} belgesinden metin cikmadi; cikan metin {len(text)} "
+            f"karakter, gereken en az {settings.min_text_chars}",
+        )
+    config.log("info", f"{kind} metni cikarildi: {len(blocks)} blok, {path}")
+    return text, len(blocks), 0
+
+
 def extract_text(
+    path: str, settings: Any, check: Callable[[], None]
+) -> tuple[str, int, int]:
+    try:
+        kind = extract.sniff(path)
+    except extract.ExtractError as exc:
+        raise EngineError(SOURCE_UNREADABLE, str(exc)) from exc
+    readers = {
+        extract.KIND_DOCX: extract.docx_blocks,
+        extract.KIND_PPTX: extract.pptx_slides,
+        extract.KIND_ODT: extract.odt_blocks,
+        extract.KIND_ODP: extract.odp_slides,
+        extract.KIND_TEXT: extract.text_blocks,
+    }
+    reader = readers.get(kind)
+    if reader is not None:
+        check()
+        try:
+            blocks = reader(path)
+        except extract.ExtractError as exc:
+            raise EngineError(exc.code, str(exc)) from exc
+        return _finish_text(blocks, settings, kind, path)
+    if kind != extract.KIND_PDF:
+        raise EngineError(UNSUPPORTED_SOURCE, extract.unsupported_message(kind))
+    return _extract_pdf(path, settings, check)
+
+
+def _extract_pdf(
     path: str, settings: Any, check: Callable[[], None]
 ) -> tuple[str, int, int]:
     try:
@@ -164,6 +206,34 @@ def extract_text(
     if ocr_pages:
         config.log("info", f"OCR {ocr_pages} sayfada kullanildi: {path}")
     return text, len(pages), ocr_pages
+
+
+SOURCE_SEPARATOR = "\n\n"
+
+
+def extract_sources(
+    paths: list[Path], settings: Any, check: Callable[[], None]
+) -> tuple[str, int, int]:
+    if not paths:
+        raise EngineError(SOURCE_NOT_FOUND, "is icin hic kaynak verilmedi")
+    if len(paths) == 1:
+        return extract_text(str(paths[0]), settings, check)
+    parts: list[str] = []
+    pages = 0
+    ocr_pages = 0
+    for index, path in enumerate(paths, 1):
+        check()
+        try:
+            text, page_count, ocr = extract_text(str(path), settings, check)
+        except EngineError as exc:
+            raise EngineError(
+                exc.code,
+                f"{index}. kaynak ({path.name}) okunamadi: {exc}",
+            ) from exc
+        parts.append(text)
+        pages += page_count
+        ocr_pages += ocr
+    return SOURCE_SEPARATOR.join(parts), pages, ocr_pages
 
 
 def _write_bytes(path: Path, data: bytes) -> None:
@@ -283,11 +353,15 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
 
     def runner(ctx: jobs.JobContext) -> None:
         try:
-            pdf = _source_path(settings.media_root, ctx.school, ctx.source_key)
+            sources = [
+                _source_path(settings.media_root, ctx.school, key)
+                for key in ctx.source_keys
+            ]
         except (ValueError, FileNotFoundError, OSError) as exc:
             config.log("error", f"is {ctx.job_id} kaynagi cozulemedi: {exc}")
             ctx.store.fail(ctx.job_id, SOURCE_NOT_FOUND)
             return
+        pdf = sources[0]
         ctx.check()
         ctx.progress(STAGES[0], 0.0)
         try:
@@ -303,11 +377,11 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
         succeeded = False
         try:
             ctx.progress(STAGES[1], 1.0 / total)
-            text, pages, ocr_pages = extract_text(str(pdf), settings, ctx.check)
+            text, pages, ocr_pages = extract_sources(sources, settings, ctx.check)
             config.log(
                 "info",
-                f"is {ctx.job_id} metin cikarildi: {pages} sayfa, "
-                f"{len(text)} karakter, ocr={ocr_pages}",
+                f"is {ctx.job_id} metin cikarildi: {len(sources)} kaynak, "
+                f"{pages} sayfa, {len(text)} karakter, ocr={ocr_pages}",
             )
 
             chapters = split_chapters(text, int(settings.chapter_chars), limit)

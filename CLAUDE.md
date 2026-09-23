@@ -98,10 +98,41 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
   modelin özelliğidir. `JobStore` modeli 7 durumludur (`cancel_requested` bayrağı
   `running` ve `failed` durumlarını ikiye böler), 5 değil.
 
+- **Kaynak türü uzantıdan DEĞİL içerikten belirlenir.** Backend blob anahtarı
+  gönderir; dosya diskte uzantısız durur, anahtar bir kimliktir. `extract.sniff()`
+  sihirli baytlara ve zip üye adlarına bakar. Uzantıya güvenen bir kısayol
+  eklenirse `ders.pdf` adlı bir docx yanlış ayrıştırıcıya gider.
+- **Yeni belge biçimi için bağımlılık eklenmez.** docx/pptx/odt/odp hepsi
+  zip + XML'dir; `zipfile` ve `xml.etree` yeter. `requirements.txt` iki satırdır
+  (`aioquic`, `pymupdf`) ve öyle kalmalı — imaj bağımlılık kapısından geçiyor.
+- **Zip üyesi okunmadan ÖNCE boyutu denetlenir.** `_guard_size()` üye başına
+  16 MiB, toplam 64 MiB tavanı uygular. Sınırsız `archive.read()` sıkıştırma
+  bombasına açık kapıdır.
+- **PPTX slaytları sayısal sıralanır.** `slide10.xml` alfabetik olarak
+  `slide2.xml`'den önce gelir; sıralama sayıya çevrilmeden yapılırsa anlatım
+  1, 10, 11, 2 sırasıyla akar.
+- **Okunamayan biçim sebebini ve çıkış yolunu söyler.** `unsupported_source`
+  kodu döner ve mesaj ne yapılacağını yazar (".docx olarak kaydedin" gibi).
+  Eski ikili `.doc/.ppt` için yarım ayrıştırıcı YAZILMAZ: yanlış metin
+  üretmektense açık hata verilir.
+- **Görüntü-only sunumda OCR yoktur.** PDF yolunda OCR yedeği var, PPTX/ODP
+  yolunda yok; iş `no_text_layer` ile açıkça düşer, boş üretmez. Konuşmacı
+  notları okunmaz — ölçüldü, çoğu yalnızca slayt numarası taşıyor ve anlatıma
+  çöp sokardı.
+- **Çoklu kaynakta alan EKLENDİ, yeniden adlandırılmadı.** `source_key` tekil
+  kaldı (ilk belge), `source_keys` eklendi (en fazla 20). Alan gelmezse
+  `[source_key]`'e düşülür; böylece servis backend'den ÖNCE dağıtılabilir.
+  `source_keys` `REQUIRED_FIELDS`'a **eklenmez** — eklenirse alan eklenmeden
+  önce yazılmış kayıtlar açılışta topluca atılır.
+- **Çoklu kaynakta bir belge okunamazsa iş DÜŞER**, sessizce atlanmaz. Beş
+  belgeden biri atlanırsa kullanıcı eksik içerikli bir podcast alır ve bunu
+  fark edemez; "sessiz sahte üretim yasak" ilkesi burada da geçerlidir. Hata
+  kaçıncı kaynağın sorunlu olduğunu adıyla söyler.
+
 ## Dosyalar ve komutlar
 `config.py` ortam+log · `protocol.py` çerçeveleme+mesajlar · `jobs.py` iş deposu+
 durum makinesi+sahte hat · `pipeline.py` gerçek `router.hat.Hat` runner'ı (tembel
-import) · `capabilities.py` yetenek defteri · `bridge.py` QUIC istemcisi ·
+import) · `extract.py` belge bicimi tanima + docx/pptx/odt/odp/metin okuma · `capabilities.py` yetenek defteri · `bridge.py` QUIC istemcisi ·
 `main.py` `--validate` + `--health` · `tools/smoke_test.py` elle koşulan duman testi ·
 `tools/mutation_test.py` slayt operatörleriyle mutasyon skoru · `tools/fuzz_test.py`
 altı slayt kategorisi + şablon/gramer/kapsam-geri-besleme fuzzing ·

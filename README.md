@@ -415,6 +415,160 @@ deseni geçse bile burada takılır). Dosyanın **var olup olmadığına bakmaz*
 varlık denetimini `pipeline.resolve_pdf()` yapar ve dosya yoksa iş `failed` +
 `error_code: "source_not_found"` olur.
 
+## Kaynak belge biçimleri (`src/extract.py`)
+
+Servis artık PDF'in yanında Word, PowerPoint, OpenDocument ve düz metin okur.
+Okunabilen her biçim aynı yoldan geçer: metin çıkarılır, bölümlere ayrılır,
+seslendirilir — yani biçim yalnızca **ilk adımı** değiştirir.
+
+### Tür uzantıdan DEĞİL, içerikten belirlenir
+
+Backend kaynağı bir blob anahtarıyla veriyor (`source_key`) ve dosya diskte
+`<PODCAST_MEDIA_ROOT>/<okul>/<source_key>` altında **uzantısız** duruyor — anahtar
+bir kimlik, dosya adı değil. Bu yüzden `sniff()` sihirli baytlara bakar:
+
+| İmza | Sonuç |
+| --- | --- |
+| `%PDF-` | `pdf` |
+| `PK\x03\x04` + `word/document.xml` | `docx` |
+| `PK\x03\x04` + `ppt/slides/slideN.xml` | `pptx` |
+| `PK\x03\x04` + `mimetype` = OpenDocument text/presentation | `odt` / `odp` |
+| `PK\x03\x04` + `xl/workbook.xml` veya OpenDocument spreadsheet | `sheet` (reddedilir) |
+| `{\rtf` | `rtf` (reddedilir) |
+| `\xd0\xcf\x11\xe0...` | `ole` — eski ikili `.doc/.ppt/.xls` (reddedilir) |
+| NUL içermeyen, çözülebilen metin | `text` |
+
+Bunun ölçülmüş sonucu: `ders.pdf` adlı ama içeriği docx olan bir dosya **docx**
+olarak okunur. Test bunu kilitler (`test_the_source_is_never_identified_by_its_name`).
+
+### Uzantı türevleri kendiliğinden çalışır
+
+Tür içerikten geldiği için makro etkin ve şablon türevleri **ek kod istemez**;
+iç yapıları aynıdır:
+
+```
+.docm .dotx .dotm          -> docx gibi okunur
+.pptm .potx .potm .ppsx .ppsm  -> pptx gibi okunur
+```
+
+Bunlar varsayım değil, `RelatedExtensionsNeedNoExtraCode` ile sınanır.
+
+### Reddedilen biçimler sebebini ve çıkış yolunu söyler
+
+Sessizce "bilinmeyen" demek yerine her red ne yapılacağını yazar:
+
+| Biçim | Mesaj |
+| --- | --- |
+| `.doc/.ppt/.xls` | "eski ikili Office bicimi; dosyayi .docx veya .pptx olarak kaydedip yeniden yukleyin" |
+| `.xlsx/.ods` | "hesap tablosu anlatima uygun degil; ders metnini belge olarak yukleyin" |
+| `.rtf` | "rtf desteklenmiyor; .docx veya .odt olarak kaydedin" |
+
+Hata kodu `unsupported_source`'tur (18 karakter; backend `error_code` için 64
+karakter sınırı koyar, test bunu da doğrular).
+
+Eski ikili biçimler için yarım yamalak bir ayrıştırıcı **bilerek yazılmadı**:
+OLE2 stdlib ile okunamaz, gerçek destek `antiword` ya da LibreOffice headless
+ister. Yanlış metin üretmektense açık hata verilir.
+
+### Yeni bağımlılık YOK
+
+DOCX, PPTX, ODT ve ODP hepsi zip + XML'dir; `zipfile` ve `xml.etree` stdlib'de
+vardır. `requirements.txt` değişmedi (`aioquic`, `pymupdf`).
+
+### Zip bombası koruması
+
+Sıkıştırılmış bir belge açıldığında belleği doldurabilir. `_guard_size()`
+okumadan ÖNCE bildirilen boyuta bakar: üye başına 16 MiB, toplam 64 MiB. Düz
+metin için ayrı 16 MiB tavanı vardır.
+
+### PPTX slayt sırası sayısaldır
+
+`slide10.xml` alfabetik olarak `slide2.xml`'den ÖNCE gelir. Slayt adları
+sayıya çevrilip sıralanır; aksi hâlde anlatım 1, 10, 11, 2 sırasıyla akardı.
+
+### Bilinen sınır: görüntü-only sunumlarda OCR yok
+
+PDF yolunda tarama sayfaları için OCR yedeği vardır (`get_textpage_ocr`).
+PPTX/ODP yolunda **yoktur**. Ölçülen gerçek örnek: 36 slaytlık bir sunumda
+hiç `<a:t>` düğümü yok, 145 medya dosyası var — yani slaytlar görüntü.
+Bu durumda iş sessizce boş üretmez, `no_text_layer` ile açıkça düşer.
+
+Konuşmacı notları da okunmaz. Ölçüldü: o sunumdaki 36 notun hepsi doluydu ama
+içerikleri yalnızca slayt numarasıydı ("1", "10"); körü körüne eklemek anlatıma
+çöp sokardı.
+
+Gövde dışı metin (üstbilgi, altbilgi, dipnot) alınmaz. 90 gerçek docx'te
+ölçüldü: gövdede 1.120.077 karakter, gövde dışında 342 düğüm — binde üçten az.
+
+### Gerçek dosyalarla ölçüm
+
+369 gerçek Office dosyası tarandı, **çıkarım hatası sıfır**:
+
+| Uzantı | Dosya | Tanınan | Okuma hatası |
+| --- | --- | --- | --- |
+| `.docx` | 283 | 257 | 0 |
+| `.pptx` | 58 | 56 | 0 |
+| `.doc` | 28 | 23 (reddedildi) | 0 |
+| `.txt` | 400 örnek | 400 | 0 |
+| `.md` | 144 | 142 | 0 |
+
+Tanınmayanların tamamı 0–165 baytlık artık dosyalardı, gerçek belge değil.
+
+## Çoklu kaynak: N belge, tek podcast
+
+Bir iş birden çok belgeyi birleştirip **tek** podcast üretebilir. Belgeler
+farklı biçimlerde olabilir — bir docx, bir pptx ve bir odt aynı işte toplanabilir.
+
+### Sözleşme kırılmadı, alan EKLENDİ
+
+`audio_id`/`audio_ids` çiftinde olduğu gibi tekil alan yerinde kaldı:
+
+```
+source_key   TEKIL kaldi, ilk belgeyi gosterir
+source_keys  EKLENDI, tum belgeler (en fazla MAX_SOURCES = 20)
+```
+
+`source_keys` gelmezse `[source_key]`'e düşülür, yani **eski yük eski davranışı
+üretir**. Bu kasıtlıdır: servis backend'den önce dağıtılabilsin, iki repo aynı
+anda deploy edilmek zorunda kalmasın diye.
+
+`source_keys` `REQUIRED_FIELDS`'a **eklenmedi**. Eklenseydi, alan eklenmeden önce
+diske yazılmış işler açılışta topluca atılırdı; `JobContext` cogul alanı yoksa
+tekilden türetir.
+
+### Doğrulama
+
+`podcast.submit` şu durumlarda `bad_request` döner: liste değilse, boşsa, boş
+metin içeriyorsa, aynı kaynağı tekrar ediyorsa, ilk öğesi `source_key` ile
+uyuşmuyorsa, ya da 20'yi aşıyorsa.
+
+### Birleştirme
+
+Belgeler **gönderildikleri sırayla** okunur ve metinleri boş satırla ayrılarak
+birleştirilir; sonra mevcut bölümleme ve seslendirme aynen çalışır. Tek kaynaklı
+bir iş `extract_text` ile birebir aynı sonucu üretir — test bunu kilitler.
+
+### Bir belge okunamazsa iş DÜŞER
+
+Sessizce atlanmaz. Gerekçe: beş belgeden biri sessizce atlanırsa kullanıcı eksik
+içerikli bir podcast alır ve bunu fark edemez — deponun "sessiz sahte üretim
+yasak" ilkesine aykırıdır. Hata kaçıncı kaynağın sorunlu olduğunu söyler:
+`"2. kaynak (ders.pptx) okunamadi: ..."`.
+
+İptal belgeler arasında denetlenir; 20 belgelik bir iş iptal edildiğinde
+hepsinin bitmesi beklenmez.
+
+### Backend tarafı henüz hazır değil
+
+Bugünkü backend her iki yeteneği de kullanmıyor:
+
+1. `newest_pdf()` sorgusu `content_type = 'application/pdf'` ile sabit filtreler;
+   PDF eki olmayan notta iş **hiç oluşturulmaz**.
+2. `PodcastSubmitPayload` tek bir `source_key: String` taşır.
+
+Servis ikisine de hazırdır ve alanlar gelmediği sürece eski davranışı sürdürür.
+
+
 ## İki motor (`PODCAST_ENGINE`)
 
 Gerçek işi iki motordan biri koşar; seçim **yalnızca `.env`** iledir:

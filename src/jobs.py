@@ -35,6 +35,12 @@ TRANSITIONS: dict[str, tuple[str, ...]] = {
 SIMULATED_STAGES = ("ocr", "plan", "script", "tts", "mux")
 INTERRUPTED_CODE = "interrupted"
 
+def _key_list(keys: list[str] | None, first: str) -> list[str]:
+    if keys:
+        return [str(item) for item in keys]
+    return [str(first)] if first else []
+
+
 REQUIRED_FIELDS = (
     "job_id",
     "source_id",
@@ -186,6 +192,9 @@ class JobContext:
         self.source_id = record["source_id"]
         self.school = record["school"]
         self.source_key = record["source_key"]
+        self.source_keys = _key_list(
+            record.get("source_keys"), record["source_key"]
+        )
         self.format = record["format"]
         self.stages = store.stages
 
@@ -625,6 +634,7 @@ class JobStore:
         user_id: str = "",
         school: str = "",
         source_key: str = "",
+        source_keys: list[str] | None = None,
     ) -> tuple[dict[str, Any], int]:
         if not isinstance(job_id, str) or SAFE_JOB_ID.match(job_id) is None:
             raise ValueError(f"gecersiz job_id: {job_id!r}")
@@ -639,6 +649,7 @@ class JobStore:
                 "job_id": job_id,
                 "source_id": source_id,
                 "source_key": str(source_key),
+                "source_keys": _key_list(source_keys, source_key),
                 "format": job_format,
                 "state": STATE_QUEUED,
                 "stage": "",

@@ -62,10 +62,45 @@ def _optional_choice(payload: dict, key: str, choices: tuple, default: str) -> s
     return normalized
 
 
+MAX_SOURCES = 20
+
+
+def _source_keys(payload: dict, first: str) -> list[str]:
+    raw = payload.get("source_keys")
+    if raw is None:
+        return [first]
+    if not isinstance(raw, list):
+        raise CapabilityError("bad_request", "'source_keys' bir liste olmali")
+    keys: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise CapabilityError(
+                "bad_request", "'source_keys' bos olmayan metinlerden olusmali"
+            )
+        keys.append(item.strip())
+    if not keys:
+        raise CapabilityError("bad_request", "'source_keys' bos olamaz")
+    if len(keys) > MAX_SOURCES:
+        raise CapabilityError(
+            "bad_request",
+            f"tek iste en fazla {MAX_SOURCES} kaynak birlestirilebilir; "
+            f"{len(keys)} geldi",
+        )
+    if keys[0] != first:
+        raise CapabilityError(
+            "bad_request",
+            "'source_keys' ilk ogesi 'source_key' ile ayni olmali",
+        )
+    if len(set(keys)) != len(keys):
+        raise CapabilityError("bad_request", "'source_keys' ayni kaynagi tekrar ediyor")
+    return keys
+
+
 def submit(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     source_id = _require_text(payload, "source_id")
     source_key = _require_text(payload, "source_key")
+    source_keys = _source_keys(payload, source_key)
     user_id = _require_text(payload, "user_id")
     job_format = _optional_choice(payload, "format", FORMATS, DEFAULT_FORMAT)
     if job_format in LLM_FORMATS and not _llm_ready:
@@ -78,7 +113,7 @@ def submit(school: str, payload: dict) -> dict:
     try:
         record, eta = store.submit(
             job_id, source_id, job_format, user_id=user_id, school=school,
-            source_key=source_key,
+            source_key=source_key, source_keys=source_keys,
         )
     except jobs.JobExists as exc:
         raise CapabilityError("conflict", str(exc)) from exc
