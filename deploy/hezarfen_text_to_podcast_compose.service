@@ -31,6 +31,13 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Basarisiz ExecStart (acilista compose up) 1500s sonra yeniden denenir, biri
+# basarili olana kadar. systemd 259 Type=oneshot icin Restart= uygular. Bagli
+# `up` kullanilmaz: podman-compose 1.6 yalniz SIGINT'te down calistirir ve
+# konteyner baslatma hatasinda 0 ile cikar. 1500s, en uzun deploy saglik
+# kapisindan (960s) uzundur; arka plan denemesi geri almayi ezmez.
+Restart=on-failure
+RestartSec=1500s
 WorkingDirectory=%h/hezarfen_text_to_podcast
 EnvironmentFile=%h/hezarfen_text_to_podcast/hezarfen_text_to_podcast.env
 ExecStart=/usr/bin/podman compose --profile product --env-file %h/hezarfen_text_to_podcast/stack.env up -d --no-build
