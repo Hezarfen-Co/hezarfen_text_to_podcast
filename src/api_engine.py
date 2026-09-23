@@ -130,20 +130,6 @@ def _page_texts(doc: Any, settings: Any, check: Callable[[], None]) -> tuple[lis
     return texts, ocr_pages, bool(tesseract)
 
 
-def _finish_text(
-    blocks: list[str], settings: Any, kind: str, path: str
-) -> tuple[str, int, int]:
-    text = _clean_text("\n".join(blocks))
-    if len(text) < int(settings.min_text_chars):
-        raise EngineError(
-            NO_TEXT,
-            f"{kind} belgesinden metin cikmadi; cikan metin {len(text)} "
-            f"karakter, gereken en az {settings.min_text_chars}",
-        )
-    config.log("info", f"{kind} metni cikarildi: {len(blocks)} blok, {path}")
-    return text, len(blocks), 0
-
-
 def extract_text(
     path: str, settings: Any, check: Callable[[], None]
 ) -> tuple[str, int, int]:
@@ -151,24 +137,29 @@ def extract_text(
         kind = extract.sniff(path)
     except extract.ExtractError as exc:
         raise EngineError(SOURCE_UNREADABLE, str(exc)) from exc
+    if kind == extract.KIND_PDF:
+        return _extract_pdf(path, settings, check)
     readers = {
         extract.KIND_DOCX: extract.docx_blocks,
         extract.KIND_PPTX: extract.pptx_slides,
         extract.KIND_ODT: extract.odt_blocks,
         extract.KIND_ODP: extract.odp_slides,
         extract.KIND_TEXT: extract.text_blocks,
+        extract.KIND_OLE: extract.ole_blocks,
     }
     reader = readers.get(kind)
-    if reader is not None:
-        check()
-        try:
-            blocks = reader(path)
-        except extract.ExtractError as exc:
-            raise EngineError(exc.code, str(exc)) from exc
-        return _finish_text(blocks, settings, kind, path)
-    if kind != extract.KIND_PDF:
+    if reader is None:
         raise EngineError(UNSUPPORTED_SOURCE, extract.unsupported_message(kind))
-    return _extract_pdf(path, settings, check)
+    check()
+    try:
+        blocks = reader(path)
+    except extract.ExtractError as exc:
+        raise EngineError(exc.code, str(exc)) from exc
+    text = _clean_text("\n".join(blocks))
+    if not text:
+        raise EngineError(NO_TEXT, f"{kind} belgesinden metin cikmadi")
+    config.log("info", f"{kind} metni cikarildi: {len(blocks)} blok, {path}")
+    return text, len(blocks), 0
 
 
 def _extract_pdf(
@@ -191,49 +182,51 @@ def _extract_pdf(
     finally:
         doc.close()
     text = _clean_text("\n".join(pages))
-    if len(text) < int(settings.min_text_chars):
+    if not text:
         reason = (
             "sayfalarda metin katmani yok"
             if tesseract
             else "sayfalarda metin katmani yok ve tesseract kurulu degil "
             "(tesseract-ocr + tesseract-ocr-tur gerekir)"
         )
-        raise EngineError(
-            NO_TEXT,
-            f"{reason}; cikan metin {len(text)} karakter, "
-            f"gereken en az {settings.min_text_chars}",
-        )
+        raise EngineError(NO_TEXT, reason)
     if ocr_pages:
         config.log("info", f"OCR {ocr_pages} sayfada kullanildi: {path}")
     return text, len(pages), ocr_pages
 
 
-SOURCE_SEPARATOR = "\n\n"
+SOURCE_HEADER = "\n\n=== {name} ===\n\n"
 
 
 def extract_sources(
-    paths: list[Path], settings: Any, check: Callable[[], None]
+    sources: list[dict[str, Any]], settings: Any, check: Callable[[], None]
 ) -> tuple[str, int, int]:
-    if not paths:
+    if not sources:
         raise EngineError(SOURCE_NOT_FOUND, "is icin hic kaynak verilmedi")
-    if len(paths) == 1:
-        return extract_text(str(paths[0]), settings, check)
     parts: list[str] = []
     pages = 0
     ocr_pages = 0
-    for index, path in enumerate(paths, 1):
+    for source in sources:
         check()
+        path = source.get("path")
+        if path is None:
+            continue
         try:
             text, page_count, ocr = extract_text(str(path), settings, check)
         except EngineError as exc:
-            raise EngineError(
-                exc.code,
-                f"{index}. kaynak ({path.name}) okunamadi: {exc}",
-            ) from exc
+            source["status"] = f"skipped:{exc.code}"
+            config.log(
+                "info",
+                f"kaynak atlandi ({exc.code}): {source['name']}: {exc}",
+            )
+            continue
+        source["status"] = "ok"
+        if parts:
+            parts.append(SOURCE_HEADER.format(name=source["name"]))
         parts.append(text)
         pages += page_count
         ocr_pages += ocr
-    return SOURCE_SEPARATOR.join(parts), pages, ocr_pages
+    return "".join(parts), pages, ocr_pages
 
 
 def _write_bytes(path: Path, data: bytes) -> None:
@@ -352,16 +345,18 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
     total = len(STAGES)
 
     def runner(ctx: jobs.JobContext) -> None:
-        try:
-            sources = [
-                _source_path(settings.media_root, ctx.school, key)
-                for key in ctx.source_keys
-            ]
-        except (ValueError, FileNotFoundError, OSError) as exc:
-            config.log("error", f"is {ctx.job_id} kaynagi cozulemedi: {exc}")
-            ctx.store.fail(ctx.job_id, SOURCE_NOT_FOUND)
-            return
-        pdf = sources[0]
+        for spec in ctx.sources:
+            try:
+                spec["path"] = _source_path(
+                    settings.media_root, ctx.school, spec["key"]
+                )
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                spec["status"] = f"skipped:{SOURCE_UNREADABLE}"
+                config.log(
+                    "error",
+                    f"is {ctx.job_id} kaynagi cozulemedi: "
+                    f"{spec['name']}: {exc}",
+                )
         ctx.check()
         ctx.progress(STAGES[0], 0.0)
         try:
@@ -377,17 +372,37 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
         succeeded = False
         try:
             ctx.progress(STAGES[1], 1.0 / total)
-            text, pages, ocr_pages = extract_sources(sources, settings, ctx.check)
+            text, pages, ocr_pages = extract_sources(
+                ctx.sources, settings, ctx.check
+            )
+            ctx.store.update_sources(ctx.job_id, ctx.sources)
+            if all(spec["status"] != "ok" for spec in ctx.sources):
+                if all("path" not in spec for spec in ctx.sources):
+                    raise EngineError(
+                        SOURCE_NOT_FOUND, "hicbir kaynak diskte yok"
+                    )
+                first = ctx.sources[0]["status"]
+                code = first.split(":", 1)[1] if ":" in first else SOURCE_UNREADABLE
+                raise EngineError(code, "hicbir kaynak okunamadi")
+            if len(text) < int(settings.min_text_chars):
+                raise EngineError(
+                    NO_TEXT,
+                    f"birlestirilen metin {len(text)} karakter, "
+                    f"gereken en az {settings.min_text_chars}",
+                )
+            base = Path(
+                next(spec["path"] for spec in ctx.sources if spec.get("path"))
+            )
             config.log(
                 "info",
-                f"is {ctx.job_id} metin cikarildi: {len(sources)} kaynak, "
+                f"is {ctx.job_id} metin cikarildi: {len(ctx.sources)} kaynak, "
                 f"{pages} sayfa, {len(text)} karakter, ocr={ocr_pages}",
             )
 
             chapters = split_chapters(text, int(settings.chapter_chars), limit)
             if not chapters:
                 raise EngineError(SCRIPT_EMPTY, "metinden bolum uretilemedi")
-            script_dir = output_root / pdf.stem / DIR_SCRIPT / ctx.format
+            script_dir = output_root / base.stem / DIR_SCRIPT / ctx.format
             script_paths: list[Path] = []
             bodies: list[str] = []
             ctx.progress(STAGES[2], 2.0 / total)
@@ -395,11 +410,11 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
                 ctx.check()
                 body = _script_body(chapter, ctx.format, settings, ctx.check)
                 bodies.append(body)
-                script_path = script_dir / f"{pdf.stem}-b{index + 1:02d}.script.json"
+                script_path = script_dir / f"{base.stem}-b{index + 1:02d}.script.json"
                 _write_json(
                     script_path,
                     {
-                        "kaynak": pdf.name,
+                        "kaynak": base.name,
                         "format": ctx.format,
                         "bolum": index + 1,
                         "baslik": _chapter_title(body),
@@ -412,13 +427,13 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
                     STAGES[2], (2 + (index + 1) / len(chapters)) / total
                 )
 
-            audio_dir = output_root / pdf.stem / DIR_AUDIO / ctx.format
+            audio_dir = output_root / base.stem / DIR_AUDIO / ctx.format
             parts: list[Path] = []
             ctx.progress(STAGES[3], 3.0 / total)
             for index, body in enumerate(bodies):
                 ctx.check()
                 audio = tts.synthesize(body, settings)
-                part = work / f"{pdf.stem}-b{index + 1:02d}.mp3"
+                part = work / f"{base.stem}-b{index + 1:02d}.mp3"
                 _write_bytes(part, audio)
                 parts.append(part)
                 ctx.progress(
@@ -426,7 +441,7 @@ def make_runner(settings: Any) -> Callable[[jobs.JobContext], None]:
                 )
 
             ctx.progress(STAGES[4], 4.0 / total)
-            final = audio_dir / f"{pdf.stem}.mp3"
+            final = audio_dir / f"{base.stem}.mp3"
             _mux(parts, final, work)
             created.append(final)
 

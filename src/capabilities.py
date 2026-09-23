@@ -62,45 +62,66 @@ def _optional_choice(payload: dict, key: str, choices: tuple, default: str) -> s
     return normalized
 
 
-MAX_SOURCES = 20
+MAX_SOURCES = 10
 
 
-def _source_keys(payload: dict, first: str) -> list[str]:
-    raw = payload.get("source_keys")
+def _sources(payload: dict) -> tuple[str, list[dict[str, str]]]:
+    first_raw = payload.get("source_key")
+    first = first_raw.strip() if isinstance(first_raw, str) else ""
+    raw = payload.get("sources")
     if raw is None:
-        return [first]
-    if not isinstance(raw, list):
-        raise CapabilityError("bad_request", "'source_keys' bir liste olmali")
-    keys: list[str] = []
-    for item in raw:
-        if not isinstance(item, str) or not item.strip():
+        if not first:
             raise CapabilityError(
-                "bad_request", "'source_keys' bos olmayan metinlerden olusmali"
+                "bad_request", "'source_key' veya 'sources' gerekli"
             )
-        keys.append(item.strip())
-    if not keys:
-        raise CapabilityError("bad_request", "'source_keys' bos olamaz")
-    if len(keys) > MAX_SOURCES:
+        return first, [{"key": first, "name": first, "content_type": ""}]
+    if not isinstance(raw, list):
+        raise CapabilityError("bad_request", "'sources' bir liste olmali")
+    if not raw:
+        raise CapabilityError("bad_request", "'sources' bos olamaz")
+    if len(raw) > MAX_SOURCES:
         raise CapabilityError(
             "bad_request",
             f"tek iste en fazla {MAX_SOURCES} kaynak birlestirilebilir; "
-            f"{len(keys)} geldi",
+            f"{len(raw)} geldi",
         )
-    if keys[0] != first:
+    sources: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise CapabilityError(
+                "bad_request", "'sources' ogeleri anahtar-deger nesnesi olmali"
+            )
+        key = item.get("key")
+        if (
+            not isinstance(key, str)
+            or jobs.SAFE_SOURCE_ID.match(key.strip() or "") is None
+        ):
+            raise CapabilityError(
+                "bad_request",
+                "'sources' anahtarlari 'source_key' guvenlik kurallarina uymali",
+            )
+        key = key.strip()
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) and name.strip() else key
+        content_type = item.get("content_type")
+        content_type = (
+            content_type.strip() if isinstance(content_type, str) else ""
+        )
+        sources.append({"key": key, "name": name, "content_type": content_type})
+    if sources[0]["key"] != first and first:
         raise CapabilityError(
             "bad_request",
-            "'source_keys' ilk ogesi 'source_key' ile ayni olmali",
+            "'sources' ilk ogesi 'source_key' ile ayni olmali",
         )
-    if len(set(keys)) != len(keys):
-        raise CapabilityError("bad_request", "'source_keys' ayni kaynagi tekrar ediyor")
-    return keys
+    if len({item["key"] for item in sources}) != len(sources):
+        raise CapabilityError("bad_request", "'sources' ayni kaynagi tekrar ediyor")
+    return sources[0]["key"], sources
 
 
 def submit(school: str, payload: dict) -> dict:
     job_id = _require_text(payload, "job_id")
     source_id = _require_text(payload, "source_id")
-    source_key = _require_text(payload, "source_key")
-    source_keys = _source_keys(payload, source_key)
+    source_key, sources = _sources(payload)
     user_id = _require_text(payload, "user_id")
     job_format = _optional_choice(payload, "format", FORMATS, DEFAULT_FORMAT)
     if job_format in LLM_FORMATS and not _llm_ready:
@@ -113,7 +134,7 @@ def submit(school: str, payload: dict) -> dict:
     try:
         record, eta = store.submit(
             job_id, source_id, job_format, user_id=user_id, school=school,
-            source_key=source_key, source_keys=source_keys,
+            source_key=source_key, sources=sources,
         )
     except jobs.JobExists as exc:
         raise CapabilityError("conflict", str(exc)) from exc

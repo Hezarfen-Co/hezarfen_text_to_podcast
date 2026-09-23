@@ -196,6 +196,28 @@ class RelatedExtensionsNeedNoExtraCode(FormatTestCase):
         )
 
 
+class LegacyOfficeIsRead(FormatTestCase):
+    def test_an_ole_blob_sniffs_as_a_readable_kind(self) -> None:
+        path = self.write("kaynak", extract.OLE_MAGIC + b"\x00" * 32)
+        self.assertEqual(extract.sniff(path), extract.KIND_OLE)
+        self.assertIn(extract.KIND_OLE, extract.READABLE_KINDS)
+
+    def test_ole_extraction_needs_antiword_or_catppt(self) -> None:
+        import shutil
+
+        path = self.write("kaynak", extract.OLE_MAGIC + b"\x00" * 32)
+        with self.assertRaises(extract.ExtractError) as raised:
+            extract.ole_blocks(path)
+        if shutil.which("antiword") or shutil.which("catppt"):
+            self.assertEqual(
+                raised.exception.code, extract.SOURCE_UNREADABLE
+            )
+        else:
+            self.assertEqual(
+                raised.exception.code, extract.EXTRACTOR_UNAVAILABLE
+            )
+
+
 class RefusedFormatsSayWhyAndWhatToDo(FormatTestCase):
     def test_an_ooxml_spreadsheet_is_named_and_refused(self) -> None:
         path = self.write("kaynak", zip_bytes({"xl/workbook.xml": "<workbook/>"}))
@@ -222,7 +244,6 @@ class RefusedFormatsSayWhyAndWhatToDo(FormatTestCase):
         for kind in (
             extract.KIND_ZIP,
             extract.KIND_UNKNOWN,
-            extract.KIND_OLE,
             extract.KIND_SHEET,
             extract.KIND_RTF,
         ):
@@ -232,7 +253,6 @@ class RefusedFormatsSayWhyAndWhatToDo(FormatTestCase):
 
     def test_a_refused_kind_is_never_in_the_readable_set(self) -> None:
         for kind in (
-            extract.KIND_OLE,
             extract.KIND_SHEET,
             extract.KIND_RTF,
             extract.KIND_ZIP,

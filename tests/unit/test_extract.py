@@ -85,7 +85,7 @@ class SniffIdentifiesTheFormat(ExtractTestCase):
     def test_a_legacy_ole_document_is_named_not_guessed(self) -> None:
         path = self.write("kaynak", extract.OLE_MAGIC + b"\x00" * 32)
         self.assertEqual(extract.sniff(path), extract.KIND_OLE)
-        self.assertIn(".docx", extract.unsupported_message(extract.KIND_OLE))
+        self.assertIn(extract.KIND_OLE, extract.READABLE_KINDS)
 
     def test_a_plain_zip_is_not_mistaken_for_a_document(self) -> None:
         path = self.write("kaynak", _zip({"okuma.txt": "merhaba"}))
@@ -198,14 +198,22 @@ class EngineDispatchesByFormat(ExtractTestCase):
         self.assertEqual(blocks, 2)
         self.assertEqual(ocr_pages, 0)
 
-    def test_a_legacy_doc_is_refused_with_unsupported_source(self) -> None:
+    def test_a_legacy_doc_dispatches_to_the_ole_extractor(self) -> None:
+        import shutil
+
         from src import api_engine
 
         path = self.write("kaynak", extract.OLE_MAGIC + b"\x00" * 64)
         with self.assertRaises(api_engine.EngineError) as raised:
             self._extract(path)
-        self.assertEqual(raised.exception.code, api_engine.UNSUPPORTED_SOURCE)
-        self.assertIn(".docx", str(raised.exception))
+        if shutil.which("antiword") or shutil.which("catppt"):
+            self.assertEqual(
+                raised.exception.code, api_engine.SOURCE_UNREADABLE
+            )
+        else:
+            self.assertEqual(
+                raised.exception.code, api_engine.EXTRACTOR_UNAVAILABLE
+            )
 
     def test_an_unknown_blob_is_refused_with_unsupported_source(self) -> None:
         from src import api_engine
@@ -215,13 +223,22 @@ class EngineDispatchesByFormat(ExtractTestCase):
             self._extract(path)
         self.assertEqual(raised.exception.code, api_engine.UNSUPPORTED_SOURCE)
 
-    def test_a_docx_with_too_little_text_fails_as_no_text_not_as_success(self) -> None:
+    def test_a_docx_with_no_text_at_all_fails_as_no_text_layer(self) -> None:
         from src import api_engine
 
-        path = self.write("kaynak", docx_bytes(["kisa"]))
+        path = self.write("kaynak", docx_bytes(["", "   "]))
         with self.assertRaises(api_engine.EngineError) as raised:
             self._extract(path)
         self.assertEqual(raised.exception.code, api_engine.NO_TEXT)
+
+    def test_a_docx_with_a_little_text_still_extracts(self) -> None:
+        from src import api_engine
+
+        path = self.write("kaynak", docx_bytes(["kisa"]))
+        text, blocks, ocr_pages = self._extract(path)
+        self.assertEqual(text, "kisa")
+        self.assertEqual(blocks, 1)
+        self.assertEqual(ocr_pages, 0)
 
     def test_the_error_code_fits_the_backend_limit(self) -> None:
         from src import api_engine

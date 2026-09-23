@@ -435,7 +435,7 @@ bir kimlik, dosya adı değil. Bu yüzden `sniff()` sihirli baytlara bakar:
 | `PK\x03\x04` + `mimetype` = OpenDocument text/presentation | `odt` / `odp` |
 | `PK\x03\x04` + `xl/workbook.xml` veya OpenDocument spreadsheet | `sheet` (reddedilir) |
 | `{\rtf` | `rtf` (reddedilir) |
-| `\xd0\xcf\x11\xe0...` | `ole` — eski ikili `.doc/.ppt/.xls` (reddedilir) |
+| `\xd0\xcf\x11\xe0...` | `ole` — eski ikili `.doc/.ppt`; `antiword`/`catppt` ile okunur |
 | NUL içermeyen, çözülebilen metin | `text` |
 
 Bunun ölçülmüş sonucu: `ders.pdf` adlı ama içeriği docx olan bir dosya **docx**
@@ -459,21 +459,27 @@ Sessizce "bilinmeyen" demek yerine her red ne yapılacağını yazar:
 
 | Biçim | Mesaj |
 | --- | --- |
-| `.doc/.ppt/.xls` | "eski ikili Office bicimi; dosyayi .docx veya .pptx olarak kaydedip yeniden yukleyin" |
 | `.xlsx/.ods` | "hesap tablosu anlatima uygun degil; ders metnini belge olarak yukleyin" |
 | `.rtf` | "rtf desteklenmiyor; .docx veya .odt olarak kaydedin" |
 
 Hata kodu `unsupported_source`'tur (18 karakter; backend `error_code` için 64
 karakter sınırı koyar, test bunu da doğrular).
 
-Eski ikili biçimler için yarım yamalak bir ayrıştırıcı **bilerek yazılmadı**:
-OLE2 stdlib ile okunamaz, gerçek destek `antiword` ya da LibreOffice headless
-ister. Yanlış metin üretmektense açık hata verilir.
+### Eski ikili .doc/.ppt: antiword + catppt
 
-### Yeni bağımlılık YOK
+OLE imzası gören yol `antiword`'ü (.doc), o olmazsa `catppt'i (.ppt)`
+çalıştırır; 60 saniye zaman aşımıyla. Çıktı baytları sırayla utf-8 ve
+cp1254 çözülür (Türkçe eski belgeler için). İki araç da kurulu değilse
+`extractor_unavailable`, ikisi de okumazsa `source_unreadable`, çıktı boşsa
+`no_text_layer` döner — çok kaynaklı işte bu bir **atlama**dır (aşağıda).
+Araçlar Containerfile'a `antiword` + `catdoc` paketleriyle girer; ikisi de
+küçüktür ve LibreOffice gibi ağır bir bağımlılık istemez.
+
+### Yeni pip bağımlılığı YOK
 
 DOCX, PPTX, ODT ve ODP hepsi zip + XML'dir; `zipfile` ve `xml.etree` stdlib'de
-vardır. `requirements.txt` değişmedi (`aioquic`, `pymupdf`).
+vardır. `requirements.txt` değişmedi (`aioquic`, `pymupdf`). Tek bağımlılık
+değişimi apt tarafındadır: `antiword`, `catdoc`.
 
 ### Zip bombası koruması
 
@@ -508,65 +514,74 @@ Gövde dışı metin (üstbilgi, altbilgi, dipnot) alınmaz. 90 gerçek docx'te
 | --- | --- | --- | --- |
 | `.docx` | 283 | 257 | 0 |
 | `.pptx` | 58 | 56 | 0 |
-| `.doc` | 28 | 23 (reddedildi) | 0 |
+| `.doc` | 28 | 23 | 0 |
 | `.txt` | 400 örnek | 400 | 0 |
 | `.md` | 144 | 142 | 0 |
 
 Tanınmayanların tamamı 0–165 baytlık artık dosyalardı, gerçek belge değil.
+Ölçüm `.doc` henüz reddedilirken yapıldı; bugün 23 tanınan dosya
+`antiword` yoluna girer.
 
 ## Çoklu kaynak: N belge, tek podcast
 
 Bir iş birden çok belgeyi birleştirip **tek** podcast üretebilir. Belgeler
 farklı biçimlerde olabilir — bir docx, bir pptx ve bir odt aynı işte toplanabilir.
 
-### Sözleşme kırılmadı, alan EKLENDİ
+### Sözleşme: sources listesi, tekil alan geriye dönük uyumluluk içindir
 
 `audio_id`/`audio_ids` çiftinde olduğu gibi tekil alan yerinde kaldı:
 
 ```
-source_key   TEKIL kaldi, ilk belgeyi gosterir
-source_keys  EKLENDI, tum belgeler (en fazla MAX_SOURCES = 20)
+source_key   TEKIL kaldi, ilk belgeyi gosterir (bir surum uyumlulugu)
+sources      EKLENDI, tum belgeler: [{key, name, content_type}] (en fazla 10)
 ```
 
-`source_keys` gelmezse `[source_key]`'e düşülür, yani **eski yük eski davranışı
-üretir**. Bu kasıtlıdır: servis backend'den önce dağıtılabilsin, iki repo aynı
-anda deploy edilmek zorunda kalmasın diye.
+Servis `sources`'ı tercih eder; gelmezse `source_key`'ten tek girdili bir
+liste türetir — yani **eski yük eski davranışı üretir**. `sources`'un ilk
+öğesi verildiyse `source_key` ile aynı olmak zorundadır.
 
-`source_keys` `REQUIRED_FIELDS`'a **eklenmedi**. Eklenseydi, alan eklenmeden önce
-diske yazılmış işler açılışta topluca atılırdı; `JobContext` cogul alanı yoksa
+`sources` `REQUIRED_FIELDS`'a **eklenmedi**. Eklenseydi, alan eklenmeden önce
+diske yazılmış işler açılışta topluca atılırdı; `JobContext` alanı yoksa
 tekilden türetir.
 
 ### Doğrulama
 
-`podcast.submit` şu durumlarda `bad_request` döner: liste değilse, boşsa, boş
-metin içeriyorsa, aynı kaynağı tekrar ediyorsa, ilk öğesi `source_key` ile
-uyuşmuyorsa, ya da 20'yi aşıyorsa.
+`podcast.submit` şu durumlarda `bad_request` döner: `sources` liste değilse,
+boşsa, bir üye nesne değilse, `key` `source_key` güvenlik desenini
+(`^[A-Za-z0-9._-]{1,128}$`) geçmiyorsa, aynı kaynağı tekrar ediyorsa, ilk
+öğesi `source_key` ile uyuşmuyorsa, 10'u aşıyorsa — ya da `sources` da
+`source_key` da yoksa. `name` boşsa anahtara düşer; `content_type` yalnızca
+kayıt amaçlıdır, tür her zaman içerikten gelir.
 
 ### Birleştirme
 
-Belgeler **gönderildikleri sırayla** okunur ve metinleri boş satırla ayrılarak
-birleştirilir; sonra mevcut bölümleme ve seslendirme aynen çalışır. Tek kaynaklı
-bir iş `extract_text` ile birebir aynı sonucu üretir — test bunu kilitler.
+Belgeler **gönderildikleri sırayla** okunur ve metinleri belge başına
+`\n\n=== <name> ===\n\n` başlığıyla ayrılarak birleştirilir; sonra mevcut
+bölümleme ve seslendirme aynen çalışır. Tek kaynaklı bir iş başlıksız,
+`extract_text` ile birebir aynı sonucu üretir — test bunu kilitler.
 
-### Bir belge okunamazsa iş DÜŞER
+### Bir belge okunamazsa İŞ DEĞİL, o belge ATLANIR
 
-Sessizce atlanmaz. Gerekçe: beş belgeden biri sessizce atlanırsa kullanıcı eksik
-içerikli bir podcast alır ve bunu fark edemez — deponun "sessiz sahte üretim
-yasak" ilkesine aykırıdır. Hata kaçıncı kaynağın sorunlu olduğunu söyler:
-`"2. kaynak (ders.pptx) okunamadi: ..."`.
+Kaynağın çıkarımı başarısızsa iş düşmez; o belge atlanır ve iş kalanlarla
+sürer. Durum `podcast.report` yüküne eklenen `sources` alanında taşınır:
+her girdi `{key, name, status}`; `status` ya `ok` ya `skipped:<kod>`
+(`extractor_unavailable` / `source_unreadable` / `no_text_layer`
+/ `unsupported_source`). Tümü atlanırsa ya da birleşik metin
+`PODCAST_MIN_TEXT_CHARS`'ın altında kalırsa iş mevcut kodlarla düşer
+(sırayla: ilk kaynağın atlama kodu, `no_text_layer`). Bu, donmuş sözleşme
+kararıdır: on belgeden biri bozuksa kullanıcı dokuz belgelik bölümu ve
+hangi belgenin eksildiğini rapordan görür.
 
-İptal belgeler arasında denetlenir; 20 belgelik bir iş iptal edildiğinde
+İptal belgeler arasında denetlenir; 10 belgelik bir iş iptal edildiğinde
 hepsinin bitmesi beklenmez.
 
-### Backend tarafı henüz hazır değil
+### Backend tarafı
 
-Bugünkü backend her iki yeteneği de kullanmıyor:
-
-1. `newest_pdf()` sorgusu `content_type = 'application/pdf'` ile sabit filtreler;
-   PDF eki olmayan notta iş **hiç oluşturulmaz**.
-2. `PodcastSubmitPayload` tek bir `source_key: String` taşır.
-
-Servis ikisine de hazırdır ve alanlar gelmediği sürece eski davranışı sürdürür.
+Backend şeridi aynı sözleşmeyi uyguluyor: kapı (`POST /podcast/jobs`) yalnızca
+notun eki hiç yoksa ya da blob'ları diskte yoksa 409 `source_missing`
+der; yük `sources` + tekil `source_key` (ilk kaynağın anahtarı) taşır ve
+`podcast.report` artık `sources` alanını içerir. Servis bu sözleşmeye hazırdır
+ve alanlar eski haliyle gelirse legacy yolla çalışmayı sürdürür.
 
 
 ## İki motor (`PODCAST_ENGINE`)

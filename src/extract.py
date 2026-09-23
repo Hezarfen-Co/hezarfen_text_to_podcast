@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
@@ -19,6 +21,8 @@ KIND_UNKNOWN = "unknown"
 
 UNSUPPORTED_SOURCE = "unsupported_source"
 SOURCE_UNREADABLE = "source_unreadable"
+EXTRACTOR_UNAVAILABLE = "extractor_unavailable"
+NO_TEXT_LAYER = "no_text_layer"
 
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGIC = b"PK\x03\x04"
@@ -52,13 +56,14 @@ MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 MAX_MEMBER_BYTES = 16 * 1024 * 1024
 MAX_TEXT_BYTES = 16 * 1024 * 1024
 
-READABLE_KINDS = (KIND_PDF, KIND_DOCX, KIND_PPTX, KIND_ODT, KIND_ODP, KIND_TEXT)
-SUPPORTED_NOTE = "desteklenen bicimler: pdf, docx, pptx, odt, odp, duz metin"
-
-OLE_HINT = (
-    "eski ikili Office bicimi (.doc/.ppt/.xls) desteklenmiyor; "
-    "dosyayi .docx veya .pptx olarak kaydedip yeniden yukleyin"
+READABLE_KINDS = (KIND_PDF, KIND_DOCX, KIND_PPTX, KIND_ODT, KIND_ODP, KIND_TEXT, KIND_OLE)
+SUPPORTED_NOTE = (
+    "desteklenen bicimler: pdf, docx, pptx, doc, ppt, odt, odp, duz metin"
 )
+
+OLE_TOOLS = ("antiword", "catppt")
+OLE_TIMEOUT_SECS = 60
+
 SHEET_HINT = (
     "hesap tablosu (.xlsx/.ods) anlatima uygun degil; ders metnini "
     "belge olarak yukleyin"
@@ -283,13 +288,7 @@ def odp_slides(path: str | Path) -> list[str]:
     return slides
 
 
-def text_blocks(path: str | Path) -> list[str]:
-    raw = _head(path, MAX_TEXT_BYTES + 1)
-    if len(raw) > MAX_TEXT_BYTES:
-        raise ExtractError(
-            SOURCE_UNREADABLE,
-            f"duz metin {MAX_TEXT_BYTES} bayt sinirini asiyor",
-        )
+def _decoded_blocks(raw: bytes) -> list[str]:
     for encoding in TEXT_ENCODINGS:
         try:
             decoded = raw.decode(encoding)
@@ -303,9 +302,56 @@ def text_blocks(path: str | Path) -> list[str]:
     raise ExtractError(SOURCE_UNREADABLE, "duz metin cozulemedi")
 
 
+def text_blocks(path: str | Path) -> list[str]:
+    raw = _head(path, MAX_TEXT_BYTES + 1)
+    if len(raw) > MAX_TEXT_BYTES:
+        raise ExtractError(
+            SOURCE_UNREADABLE,
+            f"duz metin {MAX_TEXT_BYTES} bayt sinirini asiyor",
+        )
+    return _decoded_blocks(raw)
+
+
+def ole_blocks(path: str | Path) -> list[str]:
+    outputs: list[bytes] = []
+    available = False
+    for tool in OLE_TOOLS:
+        binary = shutil.which(tool)
+        if binary is None:
+            continue
+        available = True
+        try:
+            result = subprocess.run(
+                [binary, str(path)],
+                capture_output=True,
+                timeout=OLE_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ExtractError(
+                SOURCE_UNREADABLE,
+                f"{tool} {OLE_TIMEOUT_SECS} sn icinde bitmedi",
+            ) from exc
+        except OSError as exc:
+            raise ExtractError(
+                SOURCE_UNREADABLE, f"{tool} calistirilamadi: {exc}"
+            ) from exc
+        if result.returncode == 0 and result.stdout.strip():
+            outputs.append(result.stdout)
+            break
+    if not outputs:
+        if not available:
+            raise ExtractError(
+                EXTRACTOR_UNAVAILABLE,
+                "antiword/catppt kurulu degil; eski doc/ppt metni "
+                "cikarilamaz",
+            )
+        raise ExtractError(
+            SOURCE_UNREADABLE, "eski doc/ppt belgesi okunamadi"
+        )
+    return _decoded_blocks(outputs[0])
+
+
 def unsupported_message(kind: str) -> str:
-    if kind == KIND_OLE:
-        return OLE_HINT
     if kind == KIND_SHEET:
         return SHEET_HINT
     if kind == KIND_RTF:

@@ -35,10 +35,29 @@ TRANSITIONS: dict[str, tuple[str, ...]] = {
 SIMULATED_STAGES = ("ocr", "plan", "script", "tts", "mux")
 INTERRUPTED_CODE = "interrupted"
 
-def _key_list(keys: list[str] | None, first: str) -> list[str]:
-    if keys:
-        return [str(item) for item in keys]
-    return [str(first)] if first else []
+def _sources_list(
+    sources: list[dict[str, Any]] | None, first: str
+) -> list[dict[str, str]]:
+    if sources:
+        return [
+            {
+                "key": str(item.get("key", "")),
+                "name": str(item.get("name", "")) or str(item.get("key", "")),
+                "content_type": str(item.get("content_type", "")),
+                "status": str(item.get("status", "pending")),
+            }
+            for item in sources
+        ]
+    if first:
+        return [
+            {
+                "key": str(first),
+                "name": str(first),
+                "content_type": "",
+                "status": "pending",
+            }
+        ]
+    return []
 
 
 REQUIRED_FIELDS = (
@@ -192,8 +211,8 @@ class JobContext:
         self.source_id = record["source_id"]
         self.school = record["school"]
         self.source_key = record["source_key"]
-        self.source_keys = _key_list(
-            record.get("source_keys"), record["source_key"]
+        self.sources = _sources_list(
+            record.get("sources"), str(record.get("source_key") or "")
         )
         self.format = record["format"]
         self.stages = store.stages
@@ -634,7 +653,7 @@ class JobStore:
         user_id: str = "",
         school: str = "",
         source_key: str = "",
-        source_keys: list[str] | None = None,
+        sources: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], int]:
         if not isinstance(job_id, str) or SAFE_JOB_ID.match(job_id) is None:
             raise ValueError(f"gecersiz job_id: {job_id!r}")
@@ -649,7 +668,7 @@ class JobStore:
                 "job_id": job_id,
                 "source_id": source_id,
                 "source_key": str(source_key),
-                "source_keys": _key_list(source_keys, source_key),
+                "sources": _sources_list(sources, str(source_key)),
                 "format": job_format,
                 "state": STATE_QUEUED,
                 "stage": "",
@@ -704,6 +723,24 @@ class JobStore:
         if report:
             self._report_record(snapshot)
         return snapshot
+
+    def update_sources(
+        self, job_id: str, sources: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise JobNotFound(job_id)
+            if record["state"] != STATE_RUNNING:
+                return None
+            candidate = dict(record)
+            candidate["sources"] = [
+                {key: value for key, value in item.items() if key != "path"}
+                for item in sources
+            ]
+            candidate["updated_at"] = _now_ms()
+            self._commit(record, candidate)
+            return dict(candidate)
 
     def update_progress(
         self, job_id: str, stage: str, progress: float

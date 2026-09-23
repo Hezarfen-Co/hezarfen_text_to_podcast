@@ -102,9 +102,11 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
   gönderir; dosya diskte uzantısız durur, anahtar bir kimliktir. `extract.sniff()`
   sihirli baytlara ve zip üye adlarına bakar. Uzantıya güvenen bir kısayol
   eklenirse `ders.pdf` adlı bir docx yanlış ayrıştırıcıya gider.
-- **Yeni belge biçimi için bağımlılık eklenmez.** docx/pptx/odt/odp hepsi
-  zip + XML'dir; `zipfile` ve `xml.etree` yeter. `requirements.txt` iki satırdır
-  (`aioquic`, `pymupdf`) ve öyle kalmalı — imaj bağımlılık kapısından geçiyor.
+- **Yeni pip bağımlılığı eklenmez; sistem aracı apt'tan gelir.** docx/pptx/
+  odt/odp zip + XML'dir; `zipfile` ve `xml.etree` yeter. `requirements.txt`
+  iki satırdır (`aioquic`, `pymupdf`) ve öyle kalmalı. Eski ikili `.doc/.ppt`
+  stdlib ile OKUNMAZ: `antiword` + `catdoc` apt paketleriyle girer (60 sn
+  zaman aşımı, utf-8 -> cp1254 sırası), LibreOffice kasıtlı istenmez.
 - **Zip üyesi okunmadan ÖNCE boyutu denetlenir.** `_guard_size()` üye başına
   16 MiB, toplam 64 MiB tavanı uygular. Sınırsız `archive.read()` sıkıştırma
   bombasına açık kapıdır.
@@ -113,26 +115,32 @@ bunu tekrarlar; `tools/mutation_test.py` slayt operatorleriyle mutasyon skoru ol
   1, 10, 11, 2 sırasıyla akar.
 - **Okunamayan biçim sebebini ve çıkış yolunu söyler.** `unsupported_source`
   kodu döner ve mesaj ne yapılacağını yazar (".docx olarak kaydedin" gibi).
-  Eski ikili `.doc/.ppt` için yarım ayrıştırıcı YAZILMAZ: yanlış metin
-  üretmektense açık hata verilir.
+  OLE yolunda iki araç da yoksa `extractor_unavailable`, ikisi de okumazsa
+  `source_unreadable`, çıktı boşsa `no_text_layer` döner.
 - **Görüntü-only sunumda OCR yoktur.** PDF yolunda OCR yedeği var, PPTX/ODP
   yolunda yok; iş `no_text_layer` ile açıkça düşer, boş üretmez. Konuşmacı
   notları okunmaz — ölçüldü, çoğu yalnızca slayt numarası taşıyor ve anlatıma
   çöp sokardı.
 - **Çoklu kaynakta alan EKLENDİ, yeniden adlandırılmadı.** `source_key` tekil
-  kaldı (ilk belge), `source_keys` eklendi (en fazla 20). Alan gelmezse
-  `[source_key]`'e düşülür; böylece servis backend'den ÖNCE dağıtılabilir.
-  `source_keys` `REQUIRED_FIELDS`'a **eklenmez** — eklenirse alan eklenmeden
-  önce yazılmış kayıtlar açılışta topluca atılır.
-- **Çoklu kaynakta bir belge okunamazsa iş DÜŞER**, sessizce atlanmaz. Beş
-  belgeden biri atlanırsa kullanıcı eksik içerikli bir podcast alır ve bunu
-  fark edemez; "sessiz sahte üretim yasak" ilkesi burada da geçerlidir. Hata
-  kaçıncı kaynağın sorunlu olduğunu adıyla söyler.
+  kaldı (ilk belge, bir sürüm uyumluluğu), `sources` eklendi:
+  `[{key, name, content_type}]`, en fazla 10. Servis `sources`'ı tercih eder,
+  gelmezse tekilden türetir. `sources` `REQUIRED_FIELDS`'a **eklenmez** —
+  eklenirse alan eklenmeden önce yazılmış kayıtlar açılışta topluca atılır.
+- **Çoklu kaynakta okunamayan belge işi DÜŞÜRMEZ, ATLANIR.** Atlama kodu
+  `skipped:<kod>` olarak iş kaydındaki `sources` listesine yazılır ve
+  `podcast.report` yüküyle backend'e gider (`{key, name, status}`). Tümü
+  atlanırsa iş ilk kaynağın atlama koduyla; birleşik metin
+  `PODCAST_MIN_TEXT_CHARS` altındaysa `no_text_layer` ile düşer. Bu donmuş
+  sözleşme kararıdır; "sessiz sahte üretim" sayılmaz çünkü eksik belge
+  raporda adıyla görünür.
+- **Belgeler `\n\n=== <name> ===\n\n` başlığıyla birleşir.** Başlık yalnızca
+  belgeler ARASINDA gelir; tek kaynaklı iş başlıksızdır ve `extract_text`
+  ile birebir aynı sonucu üretir.
 
 ## Dosyalar ve komutlar
 `config.py` ortam+log · `protocol.py` çerçeveleme+mesajlar · `jobs.py` iş deposu+
 durum makinesi+sahte hat · `pipeline.py` gerçek `router.hat.Hat` runner'ı (tembel
-import) · `extract.py` belge bicimi tanima + docx/pptx/odt/odp/metin okuma · `capabilities.py` yetenek defteri · `bridge.py` QUIC istemcisi ·
+import) · `extract.py` belge bicimi tanima + docx/pptx/odt/odp/ole/metin okuma · `capabilities.py` yetenek defteri · `bridge.py` QUIC istemcisi ·
 `main.py` `--validate` + `--health` · `tools/smoke_test.py` elle koşulan duman testi ·
 `tools/mutation_test.py` slayt operatörleriyle mutasyon skoru · `tools/fuzz_test.py`
 altı slayt kategorisi + şablon/gramer/kapsam-geri-besleme fuzzing ·

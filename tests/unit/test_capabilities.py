@@ -249,6 +249,144 @@ class SubmitTests(CapabilityTestCase):
         }), "internal")
 
 
+class SourcesPayloadTests(CapabilityTestCase):
+    def base_payload(self, **extra: object) -> dict:
+        payload = {
+            "job_id": JOB_ONE,
+            "source_id": "not-1",
+            "user_id": USER_ID,
+        }
+        payload.update(extra)
+        return payload
+
+    def submit_payload(self, **extra: object) -> dict:
+        return capabilities.dispatch("podcast.submit", "okul-a", self.base_payload(**extra))
+
+    def test_missing_key_and_sources_is_bad_request(self) -> None:
+        self.assertEqual(
+            self.error_code("podcast.submit", self.base_payload()),
+            "bad_request",
+        )
+
+    def test_a_legacy_key_alone_queues_and_fills_the_sources_list(self) -> None:
+        result = self.submit_payload(source_key="ders.pdf")
+        record = self.store.get(result["job_id"])
+        self.assertEqual(record["source_key"], "ders.pdf")
+        self.assertEqual(
+            record["sources"],
+            [
+                {
+                    "key": "ders.pdf",
+                    "name": "ders.pdf",
+                    "content_type": "",
+                    "status": "pending",
+                }
+            ],
+        )
+
+    def test_sources_alone_queue_and_rekey_the_singular_field(self) -> None:
+        sources = [
+            {"key": "a.pdf", "name": "Ders Notu", "content_type": "application/pdf"},
+            {"key": "b.txt", "name": "Ikinci", "content_type": "text/plain"},
+        ]
+        result = self.submit_payload(sources=sources)
+        record = self.store.get(result["job_id"])
+        self.assertEqual(record["source_key"], "a.pdf")
+        self.assertEqual(
+            [(item["key"], item["name"], item["content_type"]) for item in record["sources"]],
+            [("a.pdf", "Ders Notu", "application/pdf"), ("b.txt", "Ikinci", "text/plain")],
+        )
+        self.assertEqual(
+            [item["status"] for item in record["sources"]], ["pending", "pending"]
+        )
+
+    def test_a_first_key_mismatch_with_the_singular_field_is_bad_request(self) -> None:
+        sources = [{"key": "b.pdf", "name": "B", "content_type": ""}]
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit", self.base_payload(source_key="a.pdf", sources=sources)
+            ),
+            "bad_request",
+        )
+
+    def test_a_non_list_sources_is_bad_request(self) -> None:
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit", self.base_payload(source_key="a.pdf", sources="a.pdf")
+            ),
+            "bad_request",
+        )
+
+    def test_an_empty_sources_list_is_bad_request(self) -> None:
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit", self.base_payload(source_key="a.pdf", sources=[])
+            ),
+            "bad_request",
+        )
+
+    def test_a_non_object_member_is_bad_request(self) -> None:
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit",
+                self.base_payload(source_key="a.pdf", sources=["a.pdf"]),
+            ),
+            "bad_request",
+        )
+
+    def test_a_key_breaking_the_source_key_rules_is_bad_request(self) -> None:
+        for bad_key in ("", "   ", 7, None, "../gizli", "a/b", "a b"):
+            with self.subTest(key=bad_key):
+                sources = [{"key": bad_key, "name": "X", "content_type": ""}]
+                self.assertEqual(
+                    self.error_code(
+                        "podcast.submit",
+                        self.base_payload(source_key="a.pdf", sources=sources),
+                    ),
+                    "bad_request",
+                )
+
+    def test_a_repeated_key_is_bad_request(self) -> None:
+        sources = [
+            {"key": "a.pdf", "name": "A", "content_type": ""},
+            {"key": "a.pdf", "name": "A2", "content_type": ""},
+        ]
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit", self.base_payload(source_key="a.pdf", sources=sources)
+            ),
+            "bad_request",
+        )
+
+    def test_more_than_the_ceiling_is_bad_request(self) -> None:
+        sources = [
+            {"key": f"k{index}.pdf", "name": f"K{index}", "content_type": ""}
+            for index in range(capabilities.MAX_SOURCES + 1)
+        ]
+        self.assertEqual(
+            self.error_code(
+                "podcast.submit",
+                self.base_payload(source_key="k0.pdf", sources=sources),
+            ),
+            "bad_request",
+        )
+
+    def test_the_ceiling_itself_is_accepted(self) -> None:
+        sources = [
+            {"key": f"k{index}.pdf", "name": f"K{index}", "content_type": ""}
+            for index in range(capabilities.MAX_SOURCES)
+        ]
+        result = self.submit_payload(source_key="k0.pdf", sources=sources)
+        record = self.store.get(result["job_id"])
+        self.assertEqual(len(record["sources"]), capabilities.MAX_SOURCES)
+
+    def test_a_blank_name_falls_back_to_the_key(self) -> None:
+        sources = [{"key": "a.pdf", "name": "   ", "content_type": "   "}]
+        result = self.submit_payload(sources=sources)
+        record = self.store.get(result["job_id"])
+        self.assertEqual(record["sources"][0]["name"], "a.pdf")
+
+
 class StatusResultCancelTests(CapabilityTestCase):
     def test_submitted_job_reports_queued_without_error_code(self) -> None:
         self.submit(JOB_ONE, "x")

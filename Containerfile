@@ -21,6 +21,8 @@ RUN apt-get update \
         libgl1 \
         libglib2.0-0 \
         tesseract-ocr \
+        antiword \
+        catdoc \
         tesseract-ocr-tur \
     && rm -rf /var/lib/apt/lists/*
 

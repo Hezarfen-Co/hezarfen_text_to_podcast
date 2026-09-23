@@ -464,7 +464,7 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         self._counter += 1
         return f"aaaaaaaa-aaaa-7aaa-8aaa-{self._counter:012x}"
 
-    def run_job(self, source_id: str, job_format: str):
+    def run_job(self, source_id: str, job_format: str, sources=None):
         store = jobs.JobStore(
             root=self.job_root,
             workers=1,
@@ -485,7 +485,8 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         store.start()
         try:
             job_id = store.submit(
-                self.job_id(), source_id, job_format, school="okul-a", source_key=source_id
+                self.job_id(), source_id, job_format, school="okul-a",
+                source_key=source_id, sources=sources,
             )[0]["job_id"]
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
@@ -534,6 +535,77 @@ class EngineEndToEndTests(EnvIsolatedTestCase):
         record, _ = self.run_job("ders.pdf", "duz_okuma")
         self.assertEqual(record["state"], jobs.STATE_DONE)
         self.assertEqual(self.stub.llm_calls(), [])
+
+    def test_a_corrupt_middle_source_is_skipped_and_the_job_finishes(self) -> None:
+        from tests.unit.test_extract_formats import docx_bytes
+
+        (self.media_root / "okul-a" / "not.docx").write_bytes(
+            docx_bytes(["Hucre canliligin temel birimidir. " * 8])
+        )
+        (self.media_root / "okul-a" / "bozuk").write_bytes(b"\x00bozuk veri")
+        sources = [
+            {"key": "not.docx", "name": "Hucre Notu", "content_type": "application/octet-stream"},
+            {"key": "bozuk", "name": "Bozuk", "content_type": "application/octet-stream"},
+            {"key": "ders.pdf", "name": "Ders", "content_type": "application/pdf"},
+        ]
+        record, _ = self.run_job("not.docx", "duz_okuma", sources=sources)
+        self.assertEqual(record["state"], jobs.STATE_DONE, record["error_code"])
+        self.assertEqual(
+            [item["status"] for item in record["sources"]],
+            ["ok", "skipped:unsupported_source", "ok"],
+        )
+
+    def test_a_missing_blob_is_skipped_and_reported(self) -> None:
+        sources = [
+            {"key": "yok.pdf", "name": "Yok", "content_type": "application/pdf"},
+            {"key": "ders.pdf", "name": "Ders", "content_type": "application/pdf"},
+        ]
+        record, _ = self.run_job("yok.pdf", "duz_okuma", sources=sources)
+        self.assertEqual(record["state"], jobs.STATE_DONE, record["error_code"])
+        self.assertEqual(
+            [item["status"] for item in record["sources"]],
+            ["skipped:source_unreadable", "ok"],
+        )
+
+    def test_all_blobs_missing_fails_as_source_not_found(self) -> None:
+        sources = [
+            {"key": "yok1.pdf", "name": "Yok Bir", "content_type": "application/pdf"},
+            {"key": "yok2.pdf", "name": "Yok Iki", "content_type": "application/pdf"},
+        ]
+        record, _ = self.run_job("yok1.pdf", "duz_okuma", sources=sources)
+        self.assertEqual(record["state"], jobs.STATE_FAILED)
+        self.assertEqual(record["error_code"], api_engine.SOURCE_NOT_FOUND)
+        self.assertEqual(
+            [item["status"] for item in record["sources"]],
+            ["skipped:source_unreadable", "skipped:source_unreadable"],
+        )
+
+    def test_all_sources_failing_fails_with_the_first_code(self) -> None:
+        (self.media_root / "okul-a" / "bozuk1").write_bytes(b"\x00bozuk bir")
+        (self.media_root / "okul-a" / "bozuk2").write_bytes(b"\x00bozuk iki")
+        sources = [
+            {"key": "bozuk1", "name": "Bir", "content_type": ""},
+            {"key": "bozuk2", "name": "Iki", "content_type": ""},
+        ]
+        record, _ = self.run_job("bozuk1", "duz_okuma", sources=sources)
+        self.assertEqual(record["state"], jobs.STATE_FAILED)
+        self.assertEqual(record["error_code"], api_engine.UNSUPPORTED_SOURCE)
+        self.assertEqual(
+            [item["status"] for item in record["sources"]],
+            ["skipped:unsupported_source", "skipped:unsupported_source"],
+        )
+
+    def test_text_below_the_floor_fails_as_no_text_layer(self) -> None:
+        (self.media_root / "okul-a" / "kisa.txt").write_bytes("kisa".encode("utf-8"))
+        sources = [
+            {"key": "kisa.txt", "name": "Kisa", "content_type": "text/plain"}
+        ]
+        record, _ = self.run_job("kisa.txt", "duz_okuma", sources=sources)
+        self.assertEqual(record["state"], jobs.STATE_FAILED)
+        self.assertEqual(record["error_code"], api_engine.NO_TEXT)
+        self.assertEqual(
+            [item["status"] for item in record["sources"]], ["ok"]
+        )
 
     def test_multiple_chapters_are_muxed_into_one_deliverable(self) -> None:
         self.settings.chapter_chars = 120

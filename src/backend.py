@@ -51,6 +51,7 @@ class BackendClient:
             "progress": record["progress"],
             "error_code": record["error_code"],
             "transcript": record.get("transcript") or "",
+            "sources": record.get("sources") or [],
         }
         return self._call(
             self._protocol.call_capability(school, protocol.PODCAST_REPORT_CAPABILITY, payload),
