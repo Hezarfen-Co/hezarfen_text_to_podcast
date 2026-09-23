@@ -48,7 +48,7 @@ services:
       PODCAST_LOCAL_VENV: ${PODCAST_LOCAL_VENV:-/models/local-venv}
       PODCAST_OUTPUT_ROOT: /data/podcast/out
       PODCAST_LEDGER_DB: /data/podcast/kayit/router.sqlite
-      PODCAST_CHAPTER_LIMIT: "1"
+      PODCAST_CHAPTER_LIMIT: "20"
       PODCAST_CHAPTER_CHARS: "6000"
       PODCAST_MIN_TEXT_CHARS: "200"
       PODCAST_OCR_LANG: ${PODCAST_OCR_LANG:-tur}
